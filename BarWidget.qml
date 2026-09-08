@@ -12,7 +12,7 @@ import qs.Ui
 // entries in bar.layout.*. Everything here writes through that IPC rather than
 // touching shell.json, so the shell stays the only writer.
 //
-// The service reads the same entry back out of shell.shellConfig, so a saved
+// The service reads the same entry back out of the scoped public bar config, so
 // change reaches the wallpaper without a restart.
 Panel {
   id: root
@@ -160,7 +160,7 @@ Panel {
     pickerProc.command = ["bash", "-c",
       "timeout --kill-after=1s 15s find -P " + Util.shellQuote(folder) +
       " -xdev" + (current.recursive ? " -maxdepth 32" : " -maxdepth 1") +
-      " -type f \\( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif'" +
+      " -type f ! -regex '.*[[:cntrl:]].*' \\( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif'" +
       " -o -iname '*.mp4' -o -iname '*.webm' -o -iname '*.mkv' -o -iname '*.mov' -o -iname '*.avi'" +
       " -o -iname '*.bmp' -o -iname '*.webp' \\) -print 2>/dev/null | head -n 10000 | sort -u"]
     pickerProc.running = true
@@ -173,7 +173,7 @@ Panel {
     var homePath = Quickshell.env("HOME")
     if (value === "~") value = homePath
     else if (value.indexOf("~/") === 0) value = homePath + value.substring(1)
-    if (value.length > 4096 || /[\u0000-\u001f\u007f]/.test(value)) return ""
+    if (value.length > 4096 || /[\u0000-\u001f\u007f-\u009f]/.test(value)) return ""
     return value
   }
 

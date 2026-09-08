@@ -1,7 +1,18 @@
 # Changelog
 
-## [1.2.3](https://github.com/guiestrela/wallpaper-omarchy-manager/compare/v1.2.2...v1.2.3) (2026-08-31)
+## [1.2.4](https://github.com/guiestrela/wallpaper-omarchy-manager/compare/v1.2.3...v1.2.4) (2026-09-08)
 
+### Bug Fixes
+
+* read service settings through Omarchy's scoped public bar configuration
+* ignore wallpaper filenames containing control characters during scans
+
+### Security
+
+* keep service configuration access within the third-party plugin boundary
+* reject C1 control characters as well as ASCII controls in user paths
+
+## [1.2.3](https://github.com/guiestrela/wallpaper-omarchy-manager/compare/v1.2.2...v1.2.3) (2026-08-31)
 
 ### Bug Fixes
 

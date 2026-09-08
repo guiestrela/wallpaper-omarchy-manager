@@ -41,7 +41,10 @@ Item {
   // ------------------------------------------------------------- settings
 
   readonly property string pluginId: (manifest && manifest.id) || "io.github.guiestrela.wallpaperomarchymanager"
-  readonly property var settings: lookupSettings(shell ? shell.shellConfig : null, pluginId)
+  // Third-party services receive PluginShellApi, not the host shell object.
+  // barConfig is the intentionally public, read-only view of the bar layout;
+  // using it keeps this service compatible with Omarchy's plugin isolation.
+  readonly property var settings: lookupSettings(shell ? shell.barConfig : null, pluginId)
 
   readonly property bool perDisplay: setting("perDisplay", true) === true
   readonly property int intervalSec: Math.max(0, Number(setting("intervalSec", 0)) || 0)
@@ -62,7 +65,7 @@ Item {
 
   // What the rebuild below actually watches.
   //
-  // `settings` is read out of shell.shellConfig, and the shell replaces that
+  // `settings` is read out of shell.barConfig, and the shell replaces that
   // whole object on every write to shell.json -- by any plugin, about any
   // setting. `displayConfig` therefore arrives as a new object with identical
   // contents whenever some other widget saves a checkbox, and QML compares var
@@ -209,10 +212,14 @@ Item {
   // bar entry wins so the panel's edits are what take effect.
   function lookupSettings(config, id) {
     if (!config || !id) return ({})
+    // PluginShellApi exposes barConfig directly, while older Omarchy builds
+    // passed a full shell config. Accept both shapes without reaching for the
+    // host shell object or its private top-level plugin settings.
+    var bar = config.bar && typeof config.bar === "object" ? config.bar : config
     var sections = ["left", "center", "right"]
-    if (config.bar && config.bar.layout) {
+    if (bar.layout) {
       for (var s = 0; s < sections.length; s++) {
-        var list = config.bar.layout[sections[s]]
+        var list = bar.layout[sections[s]]
         if (!Array.isArray(list)) continue
         for (var i = 0; i < list.length; i++) {
           if (list[i] && String(list[i].id) === id) return list[i]
@@ -239,7 +246,7 @@ Item {
   // prevents an accidental paste from creating an oversized command line.
   function safePath(path) {
     var value = expandHome(String(path || "").trim())
-    if (value.length > 4096 || /[\u0000-\u001f\u007f]/.test(value)) return ""
+    if (value.length > 4096 || /[\u0000-\u001f\u007f-\u009f]/.test(value)) return ""
     return value
   }
 
@@ -369,7 +376,7 @@ Item {
       // make a scan escape that folder (or walk a loop/another filesystem).
       "timeout --kill-after=1s 15s find -P " + Util.shellQuote(poolKeyFolder(key)) +
       " -xdev" + (poolKeyRecursive(key) ? " -maxdepth 32" : " -maxdepth 1") +
-      " -type f \\( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif'" +
+      " -type f ! -regex '.*[[:cntrl:]].*' \\( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif'" +
       " -o -iname '*.mp4' -o -iname '*.webm' -o -iname '*.mkv' -o -iname '*.mov' -o -iname '*.avi'" +
       " -o -iname '*.bmp' -o -iname '*.webp' \\) -print 2>/dev/null | head -n 10000 | sort -u"]
     scanProc.running = true

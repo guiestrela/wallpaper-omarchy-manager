@@ -1,6 +1,6 @@
 # wallpaperOmarchyManager
 
-Current version: **1.2.2**
+Current version: **1.2.4**
 
 Wallpaper manager for [Omarchy](https://omarchy.org) Quattro. Every
 display gets its own image, its own settings if you want them, and your whole
