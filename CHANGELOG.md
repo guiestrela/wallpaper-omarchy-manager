@@ -1,5 +1,32 @@
 # Changelog
 
+## [1.3.0](https://github.com/guiestrela/wallpaper-omarchy-manager/compare/v1.2.4...v1.3.0) (2026-09-09)
+
+
+### Features
+
+* add support for video wallpapers and update changelog ([a77b383](https://github.com/guiestrela/wallpaper-omarchy-manager/commit/a77b38383c23e268045313d553d3f22fb3381bc4))
+* enhance video wallpaper support and adjust playing state management ([b8a1c4d](https://github.com/guiestrela/wallpaper-omarchy-manager/commit/b8a1c4dcbf3b37ac901bd726a3314ad3f70be926))
+* prevent recent images from repeating ([5676073](https://github.com/guiestrela/wallpaper-omarchy-manager/commit/567607384446ec8731c9c83962efa8fb204d2252))
+* standardize plugin ID and update version to 1.1.0 ([12b46d0](https://github.com/guiestrela/wallpaper-omarchy-manager/commit/12b46d03789bfd261cc1a21e831a38c8234ac027))
+* support animated wallpapers ([e964f78](https://github.com/guiestrela/wallpaper-omarchy-manager/commit/e964f784c0b2ec732f147c821ac02aa29280baf1))
+
+
+### Bug Fixes
+
+* **bar:** force plain text format for file labels ([23afcca](https://github.com/guiestrela/wallpaper-omarchy-manager/commit/23afccab28c903c277498239baaf2275f5fd2d05))
+* enhance file scanning and image decoding ([c76a99b](https://github.com/guiestrela/wallpaper-omarchy-manager/commit/c76a99b4f5db0b5244e644ad3b02c9350d357ccc))
+* improve image decoding for large wallpapers in AnimatedImage component ([40da0ad](https://github.com/guiestrela/wallpaper-omarchy-manager/commit/40da0ad4d5c532023dc09eccb2e9ca0aa05dcaa3))
+* lowercase plugin ID for consistency ([8af2426](https://github.com/guiestrela/wallpaper-omarchy-manager/commit/8af2426781280298a4031901db785e462c34b5fc))
+* optimize wallpaper rendering with persistent buffers for smoother transitions ([4573fa3](https://github.com/guiestrela/wallpaper-omarchy-manager/commit/4573fa3f3c904b096ac945420a090afc6b20e8bc))
+* remove infinite loops from animated images in Background and BarWidget ([577a773](https://github.com/guiestrela/wallpaper-omarchy-manager/commit/577a7730c18b1d8553de00e4055f89d5a5034fab))
+* restore marketplace plugin id ([82777a6](https://github.com/guiestrela/wallpaper-omarchy-manager/commit/82777a6b06d4b2a951c20f2b53b82fc7f2462029))
+* sanitize path inputs and limit folder scans ([08f2d67](https://github.com/guiestrela/wallpaper-omarchy-manager/commit/08f2d6796f06512c74b98d013b98eb50b1a234fe))
+* sanitize path inputs and update documentation ([e21777e](https://github.com/guiestrela/wallpaper-omarchy-manager/commit/e21777e6e81cfcba3c330d0c540513be1196a8a9))
+* strengthen plugin isolation and path checks ([8aa379a](https://github.com/guiestrela/wallpaper-omarchy-manager/commit/8aa379a74bfc776a886909057418b6cf0f348d13))
+* support video wallpapers and reduce playback overhead ([f52e755](https://github.com/guiestrela/wallpaper-omarchy-manager/commit/f52e755704be6211f8238d7e53232d555f4f6e92))
+* update version to 1.1.0 and improve README clarity ([e82908b](https://github.com/guiestrela/wallpaper-omarchy-manager/commit/e82908bc1977ac16e1cedc49470f703420f34289))
+
 ## [1.2.4](https://github.com/guiestrela/wallpaper-omarchy-manager/compare/v1.2.3...v1.2.4) (2026-09-08)
 
 ### Bug Fixes
