@@ -13,6 +13,11 @@ Version 1.2.0 improves the shuffle queue so recently displayed images are kept
 out of the next picks when possible, and makes recursive scanning and decoding
 more robust for large or unsupported files.
 
+The 1.3.x line adds NUL-safe filtering for wallpaper filenames containing
+control characters, keeps the current-wallpaper link correct during theme
+changes, preserves settings when switching between shared and per-display
+configuration, and avoids starting hidden videos.
+
 > **Rewritten by Codex**, OpenAI's coding agent. Tested on real hardware, but
 > tested isn't proven — and Omarchy plugins run unsandboxed inside your shell
 > process, with your permissions. Read the source first. No promises about
@@ -69,6 +74,7 @@ To update an existing installation, run:
 
 ```bash
 omarchy plugin update io.github.guiestrela.wallpaperomarchymanager
+omarchy restart shell
 ```
 
 To remove the plugin, run:
@@ -135,6 +141,17 @@ omarchy-shell background status         # JSON state
 # hyprland bind
 bind = SUPER SHIFT, W, exec, omarchy-shell -q background next
 ```
+
+## Compatibility
+
+The plugin is designed for Omarchy Quattro and uses the shell's scoped public
+plugin APIs. It was validated locally with Omarchy `4.0.3-1`, Quickshell
+`0.3.1`, and Qt `6.11.2`.
+
+After updating the plugin, restart the shell if the old widget or service is
+still running. In folder mode, changing the theme keeps the selected
+wallpaper while applying the new Omarchy colors; with no folder configured,
+the normal Omarchy background transition is preserved.
 
 ## Requirements
 
