@@ -369,8 +369,10 @@ Item {
     var key = scanQueue[0]
     scanQueue = scanQueue.slice(1)
     scanningKey = key
-    // Newline-delimited, not -print0: StdioCollector hands the output over as
-    // a string, and NUL separators do not survive that conversion.
+    // Keep find's output NUL-delimited while filtering: a newline in a file
+    // name must not be mistaken for a record separator. Convert to newlines
+    // only after control-bearing names have been removed; StdioCollector
+    // receives the resulting safe, newline-delimited string.
     scanProc.command = ["bash", "-c",
       // Do not follow symlinks: a link inside the selected folder must not
       // make a scan escape that folder (or walk a loop/another filesystem).

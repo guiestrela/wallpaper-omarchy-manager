@@ -82,6 +82,8 @@ check "both scanners bound output" \
   test "$(count_matches 'head -n 10000' Background.qml BarWidget.qml | wc -l)" -eq 2
 check "both scanners have a timeout" \
   test "$(count_matches 'timeout --kill-after=1s 15s' Background.qml BarWidget.qml | wc -l)" -eq 2
+check "both scanners filter control-bearing names while NUL-delimited" \
+  test "$(count_matches 'print0.*LC_ALL=C grep -zav' Background.qml BarWidget.qml | wc -l)" -eq 2
 check "user paths reject ASCII and C1 control characters" \
   test "$(grep -F -n '\u007f-\u009f' Background.qml BarWidget.qml | wc -l)" -eq 2
 check "QML labels render as plain text" \
