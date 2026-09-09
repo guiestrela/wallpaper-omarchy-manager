@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.2](https://github.com/guiestrela/wallpaper-omarchy-manager/compare/v1.3.1...v1.3.2) (2026-09-09)
+
+
+### Bug Fixes
+
+* **wallpaper:** resolve folder state and link sync ([a6f2bad](https://github.com/guiestrela/wallpaper-omarchy-manager/commit/a6f2bad71bb1be480a0c8637d1bbf905d12ceb6d))
+
 ## [1.3.1](https://github.com/guiestrela/wallpaper-omarchy-manager/compare/v1.3.0...v1.3.1) (2026-09-09)
 
 
