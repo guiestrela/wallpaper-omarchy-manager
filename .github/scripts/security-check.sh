@@ -21,7 +21,13 @@ check() {
 }
 
 has_text() {
-  rg -q --fixed-strings -- "$2" "$1"
+  grep -Fq -- "$2" "$1"
+}
+
+count_matches() {
+  local pattern="$1"
+  shift
+  grep -En -- "$pattern" "$@" 2>/dev/null || true
 }
 
 safe_path() {
@@ -62,23 +68,23 @@ echo "Wallpaper plugin security checks"
 check "service uses scoped barConfig instead of shellConfig" \
   has_text Background.qml 'lookupSettings(shell ? shell.barConfig : null, pluginId)'
 check "service does not access private shellConfig" \
-  test "$(rg -n 'shell\.shellConfig' Background.qml || true)" = ""
+  test "$(grep -En 'shell\.shellConfig' Background.qml || true)" = ""
 check "both scanners quote the configured folder" \
-  test "$(rg -n 'find -P.*Util\.shellQuote' Background.qml BarWidget.qml | wc -l)" -eq 2
+  test "$(count_matches 'find -P.*Util\.shellQuote' Background.qml BarWidget.qml | wc -l)" -eq 2
 check "both scanners stay on one filesystem" \
-  test "$(rg -n ' -xdev' Background.qml BarWidget.qml | wc -l)" -eq 2
+  test "$(count_matches ' -xdev' Background.qml BarWidget.qml | wc -l)" -eq 2
 check "both scanners have bounded depth" \
-  test "$(rg -n 'maxdepth 32' Background.qml BarWidget.qml | wc -l)" -ge 2
+  test "$(count_matches 'maxdepth 32' Background.qml BarWidget.qml | wc -l)" -ge 2
 check "both scanners bound output" \
-  test "$(rg -n 'head -n 10000' Background.qml BarWidget.qml | wc -l)" -eq 2
+  test "$(count_matches 'head -n 10000' Background.qml BarWidget.qml | wc -l)" -eq 2
 check "both scanners have a timeout" \
-  test "$(rg -n 'timeout --kill-after=1s 15s' Background.qml BarWidget.qml | wc -l)" -eq 2
+  test "$(count_matches 'timeout --kill-after=1s 15s' Background.qml BarWidget.qml | wc -l)" -eq 2
 check "user paths reject ASCII and C1 control characters" \
-  test "$(rg -F -n '\u007f-\u009f' Background.qml BarWidget.qml | wc -l)" -eq 2
+  test "$(grep -F -n '\u007f-\u009f' Background.qml BarWidget.qml | wc -l)" -eq 2
 check "QML labels render as plain text" \
-  test "$(rg -n 'textFormat: Text\.PlainText' BarWidget.qml | wc -l)" -ge 4
+  test "$(count_matches 'textFormat: Text\.PlainText' BarWidget.qml | wc -l)" -ge 4
 check "plugin QML has no network downloader" \
-  test "$(rg -n -e '\b(curl|wget|nc|socat)\b' --glob '*.qml' . || true)" = ""
+  test "$(grep -ERn --include='*.qml' '(^|[^[:alnum:]_])(curl|wget|nc|socat)([^[:alnum:]_]|$)' . || true)" = ""
 
 check "safe path accepts a normal absolute path" safe_path "/home/user/Wallpapers"
 
