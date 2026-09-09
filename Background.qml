@@ -385,7 +385,7 @@ Item {
       " -type f \\( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif'" +
       " -o -iname '*.mp4' -o -iname '*.webm' -o -iname '*.mkv' -o -iname '*.mov' -o -iname '*.avi'" +
       " -o -iname '*.bmp' -o -iname '*.webp' \\) -print0 2>/dev/null | LC_ALL=C grep -zav '[[:cntrl:]]'" +
-      " | LC_ALL=C.UTF-8 grep -zavP '[\\\\x{80}-\\\\x{9f}]' | tr '\\\\0' '\\\\n' | head -n 10000 | sort -u"]
+      " | LC_ALL=C.UTF-8 grep -zavP '[\\x{80}-\\x{9f}]' | tr '\\0' '\\n' | head -n 10000 | sort -u"]
     scanProc.running = true
   }
 
