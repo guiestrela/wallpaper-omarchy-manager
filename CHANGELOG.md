@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.1](https://github.com/guiestrela/wallpaper-omarchy-manager/compare/v1.3.0...v1.3.1) (2026-09-09)
+
+
+### Bug Fixes
+
+* **scan:** filter control chars with NUL delimiter ([aafac29](https://github.com/guiestrela/wallpaper-omarchy-manager/commit/aafac29c23123ffc9fa3d30a57ea0f0abd28c0c1))
+
 ## [1.3.0](https://github.com/guiestrela/wallpaper-omarchy-manager/compare/v1.2.4...v1.3.0) (2026-09-09)
 
 
