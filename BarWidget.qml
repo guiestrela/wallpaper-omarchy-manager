@@ -160,9 +160,11 @@ Panel {
     pickerProc.command = ["bash", "-c",
       "timeout --kill-after=1s 15s find -P " + Util.shellQuote(folder) +
       " -xdev" + (current.recursive ? " -maxdepth 32" : " -maxdepth 1") +
-      " -type f ! -regex '.*[[:cntrl:]].*' \\( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif'" +
+      " -type f \\( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif'" +
       " -o -iname '*.mp4' -o -iname '*.webm' -o -iname '*.mkv' -o -iname '*.mov' -o -iname '*.avi'" +
-      " -o -iname '*.bmp' -o -iname '*.webp' \\) -print 2>/dev/null | head -n 10000 | sort -u"]
+      " -o -iname '*.bmp' -o -iname '*.webp' \\) -print0 2>/dev/null |" +
+      " LC_ALL=C grep -z -v -P '[\\x01-\\x1f\\x7f-\\x9f]' |" +
+      " tr '\\0' '\\n' | head -n 10000 | sort -u"]
     pickerProc.running = true
   }
 

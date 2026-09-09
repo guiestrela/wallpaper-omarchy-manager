@@ -369,16 +369,20 @@ Item {
     var key = scanQueue[0]
     scanQueue = scanQueue.slice(1)
     scanningKey = key
-    // Newline-delimited, not -print0: StdioCollector hands the output over as
-    // a string, and NUL separators do not survive that conversion.
+    // Keep find's output NUL-delimited while filtering: a newline in a file
+    // name must not be mistaken for a record separator. Convert to newlines
+    // only after control-bearing names have been removed; StdioCollector
+    // receives the resulting safe, newline-delimited string.
     scanProc.command = ["bash", "-c",
       // Do not follow symlinks: a link inside the selected folder must not
       // make a scan escape that folder (or walk a loop/another filesystem).
       "timeout --kill-after=1s 15s find -P " + Util.shellQuote(poolKeyFolder(key)) +
       " -xdev" + (poolKeyRecursive(key) ? " -maxdepth 32" : " -maxdepth 1") +
-      " -type f ! -regex '.*[[:cntrl:]].*' \\( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif'" +
+      " -type f \\( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif'" +
       " -o -iname '*.mp4' -o -iname '*.webm' -o -iname '*.mkv' -o -iname '*.mov' -o -iname '*.avi'" +
-      " -o -iname '*.bmp' -o -iname '*.webp' \\) -print 2>/dev/null | head -n 10000 | sort -u"]
+      " -o -iname '*.bmp' -o -iname '*.webp' \\) -print0 2>/dev/null |" +
+      " LC_ALL=C grep -z -v -P '[\\x01-\\x1f\\x7f-\\x9f]' |" +
+      " tr '\\0' '\\n' | head -n 10000 | sort -u"]
     scanProc.running = true
   }
 

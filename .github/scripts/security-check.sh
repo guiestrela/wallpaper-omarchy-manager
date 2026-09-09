@@ -56,10 +56,12 @@ scan_folder() {
 
   local quoted command
   quoted=$(shell_quote "$folder")
-  command="timeout --kill-after=1s 15s find -P $quoted -xdev $depth -type f ! -regex '.*[[:cntrl:]].*' \\
+  command="timeout --kill-after=1s 15s find -P $quoted -xdev $depth -type f \\
     \\( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif' \\
     -o -iname '*.mp4' -o -iname '*.webm' -o -iname '*.mkv' -o -iname '*.mov' -o -iname '*.avi' \\
-    -o -iname '*.bmp' -o -iname '*.webp' \\) -print 2>/dev/null | head -n 10000 | sort -u"
+    -o -iname '*.bmp' -o -iname '*.webp' \\) -print0 2>/dev/null |
+    LC_ALL=C grep -z -v -P '[\\x01-\\x1f\\x7f-\\x9f]' |
+    tr '\\0' '\\n' | head -n 10000 | sort -u"
   bash -c "$command"
 }
 
@@ -79,6 +81,8 @@ check "both scanners bound output" \
   test "$(count_matches 'head -n 10000' Background.qml BarWidget.qml | wc -l)" -eq 2
 check "both scanners have a timeout" \
   test "$(count_matches 'timeout --kill-after=1s 15s' Background.qml BarWidget.qml | wc -l)" -eq 2
+check "both scanners filter control-bearing names while NUL-delimited" \
+  test "$(count_matches 'grep -z -v -P' Background.qml BarWidget.qml | wc -l)" -eq 2
 check "user paths reject ASCII and C1 control characters" \
   test "$(grep -F -n '\u007f-\u009f' Background.qml BarWidget.qml | wc -l)" -eq 2
 check "QML labels render as plain text" \
