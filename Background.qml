@@ -376,9 +376,10 @@ Item {
       // make a scan escape that folder (or walk a loop/another filesystem).
       "timeout --kill-after=1s 15s find -P " + Util.shellQuote(poolKeyFolder(key)) +
       " -xdev" + (poolKeyRecursive(key) ? " -maxdepth 32" : " -maxdepth 1") +
-      " -type f ! -regex '.*[[:cntrl:]].*' \\( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif'" +
+      " -type f \\( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif'" +
       " -o -iname '*.mp4' -o -iname '*.webm' -o -iname '*.mkv' -o -iname '*.mov' -o -iname '*.avi'" +
-      " -o -iname '*.bmp' -o -iname '*.webp' \\) -print 2>/dev/null | head -n 10000 | sort -u"]
+      " -o -iname '*.bmp' -o -iname '*.webp' \\) -print0 2>/dev/null | LC_ALL=C grep -zav '[[:cntrl:]]'" +
+      " | LC_ALL=C.UTF-8 grep -zavP '[\\\\x{80}-\\\\x{9f}]' | tr '\\\\0' '\\\\n' | head -n 10000 | sort -u"]
     scanProc.running = true
   }
 
