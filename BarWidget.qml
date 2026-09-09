@@ -62,11 +62,14 @@ Panel {
     }
     var mode = String(pick("mode", "shuffle"))
     var scaling = String(pick("scaling", "zoom"))
+    var folder = String(pick("folder", setting("folder", "")))
+    var pinned = String(pick("pinned", ""))
+    if (folder.trim() === "") pinned = ""
     return {
-      folder: String(pick("folder", setting("folder", ""))),
+      folder: folder,
       recursive: pick("recursive", setting("recursive", true)) === true,
       mode: mode === "single" ? "single" : "shuffle",
-      pinned: String(pick("pinned", "")),
+      pinned: pinned,
       scaling: ["zoom", "fitHeight", "fitWidth", "actual"].indexOf(scaling) !== -1 ? scaling : "zoom"
     }
   }
@@ -77,7 +80,7 @@ Panel {
   // rather than merging into it. Seeding from the resolved config also folds
   // any legacy top-level settings into the new shape on the first edit, which
   // is the only migration this needs.
-  function persistDisplay(key, value) {
+  function copyDisplayConfig() {
     var dc = ({})
     var existing = displayConfig
     if (existing && typeof existing === "object") {
@@ -89,8 +92,37 @@ Panel {
         }
       }
     }
+    return dc
+  }
+
+  function persistDisplay(key, value) {
+    var dc = copyDisplayConfig()
     if (!dc[editingKey]) dc[editingKey] = configFor(editingKey)
     dc[editingKey][key] = value
+    persist("displayConfig", dc)
+  }
+
+  // When switching from per-display settings to one shared setting, preserve
+  // the configuration currently shown in the panel instead of falling back to
+  // the empty legacy top-level folder. Queue the displayConfig write first so
+  // the following toggle cannot race it.
+  function setPerDisplayConfig(enabled) {
+    enabled = enabled === true
+    if (!enabled) {
+      var dc = copyDisplayConfig()
+      if (!dc.all || typeof dc.all !== "object") dc.all = configFor(editingKey)
+      persist("displayConfig", dc)
+    }
+    persist("perDisplayConfig", enabled)
+  }
+
+  // Clearing a folder must also clear its pin. Otherwise the service still
+  // considers the plugin active because a stale pinned path remains.
+  function clearFolder() {
+    var dc = copyDisplayConfig()
+    if (!dc[editingKey]) dc[editingKey] = configFor(editingKey)
+    dc[editingKey].folder = ""
+    dc[editingKey].pinned = ""
     persist("displayConfig", dc)
   }
 
@@ -218,14 +250,26 @@ Panel {
 
   property int skipped: 0
 
-  // Read back from the registry that loaded us rather than kept as a copy
-  // here, so the tooltip cannot claim a version we are not running.
-  readonly property string version: {
-    try {
-      return String(bar.shell.pluginRegistry.installedPlugins[moduleName].version || "")
-    } catch (e) {
-      return ""
+  // PluginBarApi deliberately exposes a scoped PluginShellApi, not the host's
+  // registry. Read the local manifest instead of traversing a private API that
+  // is not present in the third-party plugin boundary.
+  property string manifestVersion: ""
+  readonly property string version: manifestVersion
+
+  FileView {
+    id: manifestFile
+    path: String(Qt.resolvedUrl("manifest.json")).replace(/^file:\/\//, "")
+    watchChanges: false
+    printErrors: false
+    onLoaded: {
+      try {
+        var data = JSON.parse(manifestFile.text())
+        root.manifestVersion = data && data.version !== undefined ? String(data.version) : ""
+      } catch (e) {
+        root.manifestVersion = ""
+      }
     }
+    onLoadFailed: root.manifestVersion = ""
   }
 
   // Which display keys are in play. Before the service has reported its
@@ -733,7 +777,7 @@ Panel {
             checked: root.perDisplayConfig
             foreground: root.fg
             fontFamily: root.fontFamily
-            onClicked: root.persist("perDisplayConfig", !root.perDisplayConfig)
+            onClicked: root.setPerDisplayConfig(!root.perDisplayConfig)
           }
 
           ButtonGroup {
@@ -817,7 +861,7 @@ Panel {
             width: parent.width
             foreground: root.fg
             fontFamily: root.fontFamily
-            onClicked: root.persistDisplay("folder", "")
+            onClicked: root.clearFolder()
           }
 
           Toggle {

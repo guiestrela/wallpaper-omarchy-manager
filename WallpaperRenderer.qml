@@ -79,7 +79,7 @@ Item {
       source: root.videoMode ? Util.fileUrl(root.sourcePath) : ""
       fillMode: root.fillModeName === "zoom"
         ? VideoOutput.PreserveAspectCrop : VideoOutput.Stretch
-      autoPlay: true
+      autoPlay: root.playing
       loops: MediaPlayer.Infinite
       muted: true
       onPlaybackStateChanged: {

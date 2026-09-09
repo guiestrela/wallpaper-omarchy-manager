@@ -97,6 +97,10 @@ Item {
     }
     var folder = safePath(pick("folder", setting("folder", "")))
     var pinned = safePath(pick("pinned", ""))
+    // A pinned image only has meaning inside a configured folder. Ignore
+    // stale pin data after the folder is cleared so the default Omarchy
+    // background path really becomes active again.
+    if (folder === "") pinned = ""
     // A pinned image is selected from the configured folder by the UI. Keep
     // that invariant when settings are edited externally as well.
     var relativePinned = folder !== "" && pinned.indexOf(folder + "/") === 0
@@ -728,7 +732,27 @@ Item {
     linkProc.running = true
   }
 
+  // omarchy-theme-set rewrites the current-background symlink after the theme
+  // transition IPC returns. In folder mode that image is not ours, so repair
+  // the link from the wallpaper currently shown by the primary display.
+  function syncDisplayedCurrentLink() {
+    var primary = primaryScreenName()
+    if (!primary) return
+    var path = String(displayedMap[primary] || incomingMap[primary] || "")
+    if (!path) return
+    var picks = ({})
+    picks[primary] = path
+    syncCurrentLink(picks)
+  }
+
   Process { id: linkProc }
+
+  Timer {
+    id: folderLinkRepairTimer
+    interval: 250
+    repeat: false
+    onTriggered: root.syncDisplayedCurrentLink()
+  }
 
   // ------------------------------------------------------------ wake shuffle
 
@@ -865,6 +889,10 @@ Item {
     if (hasFolder()) {
       setPendingTheme(colorsB64, shellB64)
       applyPendingTheme()
+      // The theme script updates the symlink immediately after this handler
+      // returns; the delayed repair runs after that write has completed.
+      syncDisplayedCurrentLink()
+      folderLinkRepairTimer.restart()
       return
     }
     applyGlobal(fromPath, path, finalPath, false, true)
@@ -1056,7 +1084,14 @@ Item {
       var next = ({})
       for (var i = 0; i < names.length; i++) {
         var n = names[i]
-        next[n] = root.incomingMap[n] || root.displayedMap[n] || ""
+        // Theme transitions decode a temporary cached snapshot (`path`) but
+        // report the durable theme file as `currentBackground` (`finalPath`).
+        // Keep the logical displayed path durable after the snapshot is
+        // removed. Folder mode has no global final path, so it keeps the
+        // incoming per-display value.
+        next[n] = root.hasFolder()
+          ? root.incomingMap[n] || root.displayedMap[n] || ""
+          : root.currentBackground || root.incomingMap[n] || root.displayedMap[n] || ""
       }
       root.displayedMap = next
       // The incoming slot is already decoded and visible. Promote it instead
