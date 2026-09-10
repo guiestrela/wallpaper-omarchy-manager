@@ -63,6 +63,12 @@ Item {
   readonly property bool perDisplayConfig: setting("perDisplayConfig", true) === true
   readonly property var displayConfig: setting("displayConfig", null)
 
+  // An explicit per-display configuration must also use independent picks.
+  // Keep the legacy `perDisplay` switch for shared configuration, but do not
+  // let a stale `perDisplay: false` mirror displays that were configured
+  // separately.
+  readonly property bool independentDisplayPicks: perDisplayConfig || perDisplay
+
   // What the rebuild below actually watches.
   //
   // `settings` is read out of shell.barConfig, and the shell replaces that
@@ -558,7 +564,8 @@ Item {
       var queue = dealQueues[order[g]] || []
       if (!queue.length) continue
       for (var m = 0; m < members.length; m++)
-        out[members[m]] = String(perDisplay ? queue[m % queue.length] : queue[0])
+        out[members[m]] = String(independentDisplayPicks
+          ? queue[m % queue.length] : queue[0])
     }
     return out
   }
@@ -613,7 +620,7 @@ Item {
 
       // perDisplay only has meaning within a group: it asks whether these
       // displays mirror one image or each get their own.
-      if (!perDisplay) {
+      if (!independentDisplayPicks) {
         var one = dealNext(poolKey, 1, avoid)[0] || ""
         if (!one) continue
         for (var m = 0; m < members.length; m++) picks[members[m]] = one
@@ -706,7 +713,7 @@ Item {
       for (var attempt = 0; attempt < 8; attempt++) {
         drawn = dealNext(key, 1, path)[0] || ""
         if (!drawn) break
-        if (!perDisplay || !inUse[drawn]) { chosen = drawn; break }
+        if (!independentDisplayPicks || !inUse[drawn]) { chosen = drawn; break }
       }
       // Fewer usable images than displays: repeating one beats a black screen.
       if (!chosen) chosen = drawn

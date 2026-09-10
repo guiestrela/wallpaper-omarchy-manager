@@ -36,7 +36,7 @@
         "key": "perDisplayConfig",
         "type": "boolean",
         "label": "Configure each display separately",
-        "defaultValue": false,
+        "defaultValue": true,
         "description": "Off: every display shares one configuration."
       },
       {
