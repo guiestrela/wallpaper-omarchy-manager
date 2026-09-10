@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.3.3](https://github.com/guiestrela/wallpaper-omarchy-manager/compare/v1.3.2...v1.3.3) (2026-09-10)
+
+
+### Bug Fixes
+
+* **background:** guard service lifecycle context ([218d45c](https://github.com/guiestrela/wallpaper-omarchy-manager/commit/218d45cdeab43edad77a109c026575776ff3eaa4))
+* correct shell escape characters in scan commands ([20d1d6d](https://github.com/guiestrela/wallpaper-omarchy-manager/commit/20d1d6dfd8b7b75901bdc960d46146a068b3394b))
+* ensure separate displays pick unique images ([e741c5f](https://github.com/guiestrela/wallpaper-omarchy-manager/commit/e741c5f49299f7b3a81a4fa1935937a6d43d373e))
+
 ## [1.3.2](https://github.com/guiestrela/wallpaper-omarchy-manager/compare/v1.3.1...v1.3.2) (2026-09-09)
 
 
