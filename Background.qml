@@ -34,6 +34,17 @@ Item {
   property var shell: null
   property var manifest: null
 
+  // Omarchy injects these after Component.onCompleted. Some replacement bars
+  // also construct a compatibility copy of this service, but give it a facade
+  // without barConfig. That copy must stay inert: otherwise it follows the
+  // primary screen's symlink and paints it OVER the real per-display windows.
+  // An empty barConfig is valid (stock/theme mode); a missing API is not.
+  readonly property bool serviceActive: hasServiceContext()
+
+  function hasServiceContext() {
+    return !!shell && !!manifest && ("barConfig" in shell) && !!shell.barConfig
+  }
+
   readonly property string home: Quickshell.env("HOME")
   readonly property string stateHome: home + "/.local/state"
   readonly property string currentBackgroundLink: stateHome + "/omarchy/current/background"
@@ -355,6 +366,7 @@ Item {
   property string scanningKey: ""
 
   function rescan() {
+    if (!hasServiceContext()) return
     // Clearing the skip list here makes a rescan the way to retry a file that
     // has since been repaired or replaced. The cost of being wrong is one
     // failed decode, after which it is skipped again.
@@ -370,6 +382,7 @@ Item {
   }
 
   function drainScans() {
+    if (!hasServiceContext()) return
     if (scanProc.running) return
     if (!scanQueue.length) {
       poolLoaded = true
@@ -635,6 +648,7 @@ Item {
   }
 
   function shuffle(instant) {
+    if (!hasServiceContext()) return
     if (!hasFolder()) return
     if (!poolLoaded) { rescan(); return }
     var picks = pickForScreens()
@@ -650,7 +664,7 @@ Item {
   // the old deadline and can change the wallpaper again almost immediately
   // after the user asked for the next one.
   function restartAutoShuffleTimer() {
-    if (folderMode && intervalSec > 0) autoShuffleTimer.restart()
+    if (hasServiceContext() && folderMode && intervalSec > 0) autoShuffleTimer.restart()
     else autoShuffleTimer.stop()
   }
 
@@ -732,6 +746,7 @@ Item {
   // The lock screen and `omarchy theme bg current` both read the state
   // symlink, so keep it pointed at something we are actually showing.
   function syncCurrentLink(picks) {
+    if (!hasServiceContext()) return
     var primary = primaryPick(picks)
     if (!primary) return
     linkProc.command = ["ln", "-nsf", primary, currentBackgroundLink]
@@ -836,6 +851,7 @@ Item {
 
   // Stock single-image path: fill every screen with the same value.
   function applyGlobal(fromPath, path, finalPath, instant, force) {
+    if (!hasServiceContext()) return
     path = String(path || "").trim()
     finalPath = String(finalPath || path).trim()
     fromPath = String(fromPath || "").trim()
@@ -859,6 +875,7 @@ Item {
   }
 
   function refreshBackground() {
+    if (!hasServiceContext()) return
     if (hasFolder()) { shuffle(false); return }
     if (!readlinkProc.running) readlinkProc.running = true
   }
@@ -892,6 +909,7 @@ Item {
   // theme switch must still recolor the bar, so the payload is applied
   // immediately rather than being carried by a reveal that never starts.
   function transitionBackgroundWithTheme(fromPath, path, finalPath, colorsB64, shellB64) {
+    if (!hasServiceContext()) return
     if (hasFolder()) {
       setPendingTheme(colorsB64, shellB64)
       applyPendingTheme()
@@ -949,6 +967,7 @@ Item {
   // --------------------------------------------------------------- actions
 
   function openSelector() {
+    if (!hasServiceContext()) return
     // In folder mode the theme background switcher would list images we are
     // not using, so the desktop gesture advances the existing deal queue.
     // Rescanning here would throw away all images that had not been shown yet.
@@ -957,6 +976,7 @@ Item {
   }
 
   function openThemeSwitcher() {
+    if (!hasServiceContext()) return
     if (!themeSwitchProc.running) themeSwitchProc.running = true
   }
 
@@ -984,6 +1004,7 @@ Item {
   }
 
   IpcHandler {
+    enabled: root.serviceActive
     target: "background"
 
     function refresh(): void {
@@ -1057,7 +1078,7 @@ Item {
   // IPC, another tool writing the link) still land. Idle in folder mode.
   Timer {
     interval: 2000
-    running: !root.folderMode
+    running: root.serviceActive && !root.folderMode
     repeat: true
     onTriggered: root.refreshBackground()
   }
@@ -1065,7 +1086,7 @@ Item {
   Timer {
     id: autoShuffleTimer
     interval: Math.max(1, root.intervalSec) * 1000
-    running: root.folderMode && root.intervalSec > 0
+    running: root.serviceActive && root.folderMode && root.intervalSec > 0
     repeat: true
     onTriggered: root.shuffle(false)
   }
@@ -1121,11 +1142,22 @@ Item {
   onFolderChanged: configReload.restart()
   onPerDisplayChanged: if (hasFolder()) shuffle(false)
 
+  onServiceActiveChanged: {
+    if (serviceActive) configReload.restart()
+    else {
+      configReload.stop()
+      scanProc.running = false
+      readlinkProc.running = false
+      linkProc.running = false
+    }
+  }
+
   Timer {
     id: configReload
     interval: 250
     repeat: false
     onTriggered: {
+      if (!root.hasServiceContext()) return
       root.poolLoaded = false
       if (root.hasFolder()) root.rescan()
       else root.refreshBackground()
@@ -1142,12 +1174,13 @@ Item {
   }
 
   Component.onCompleted: {
+    if (!hasServiceContext()) return
     if (hasFolder()) rescan()
     else refreshBackground()
   }
 
   Variants {
-    model: Quickshell.screens
+    model: root.serviceActive ? Quickshell.screens : []
 
     PanelWindow {
       id: panel
