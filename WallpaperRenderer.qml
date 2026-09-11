@@ -49,15 +49,14 @@ Item {
     AnimatedImage {
       anchors.fill: parent
       source: root.videoMode ? "" : Util.fileUrl(root.sourcePath)
-      // Decode static and animated images near their rendered size. Some
-      // wallpapers are tens of thousands of pixels wide and otherwise exceed
-      // Qt's 256 MiB decoded-image limit even when the compressed file is small.
-      // A wallpaper larger than the viewport has no visible detail beyond
-      // the viewport. Cap decoding at the monitor/widget size so "actual"
-      // scaling cannot turn a very large source image into a large allocation.
+      // Decode near the rendered width while leaving height unspecified.
+      // Supplying both viewport dimensions can make an image provider decode
+      // directly into the screen's aspect ratio before PreserveAspectCrop is
+      // applied. Asking for one dimension lets Qt derive the other from the
+      // source, so Zoom always receives undistorted pixels to crop.
       sourceSize: Qt.size(
         Math.max(1, Math.ceil(Math.min(width, root.width))),
-        Math.max(1, Math.ceil(Math.min(height, root.height))))
+        0)
       fillMode: root.fillModeName === "zoom" ? Image.PreserveAspectCrop : Image.Stretch
       asynchronous: true
       cache: false
