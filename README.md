@@ -155,13 +155,16 @@ the normal Omarchy background transition is preserved.
 
 ## Requirements
 
-Omarchy Quattro · `zenity` for the Browse button · Qt Multimedia for video
-playback. Animated GIF playback uses Qt Quick's built-in `AnimatedImage`
-support.
+Omarchy Quattro · Python 3 · `zenity` for the Browse button · Qt Multimedia
+for video playback. Animated GIF playback uses Qt Quick's built-in
+`AnimatedImage` support.
 
 The runtime does not use the network. Settings are stored through Omarchy in
 `~/.config/omarchy`; the service also updates Omarchy's current-wallpaper link
 at `~/.local/state/omarchy/current/background` so the lock screen can use it.
+Link publication is descriptor-relative: the parent is opened without
+following symlinks, ownership and write permissions are checked, and the
+published symlink is revalidated after the atomic rename.
 
 ## Theme and fonts
 
@@ -193,8 +196,10 @@ permissions, or use the network.
 Folder paths are shell-quoted before scanning, control characters and paths
 over 4096 characters are rejected, scans stay on the selected filesystem, do
 not follow symlinks, descend at most 32 levels, stop after 10,000 entries, and
-time out after 15 seconds. These limits reduce accidental resource exhaustion;
-they do not turn an Omarchy plugin into a sandbox.
+time out after 15 seconds. The current-wallpaper link is published through an
+owner-checked, no-follow directory descriptor and revalidated after each
+publication. These limits reduce accidental resource exhaustion; they do not
+turn an Omarchy plugin into a sandbox.
 
 ## Credits
 

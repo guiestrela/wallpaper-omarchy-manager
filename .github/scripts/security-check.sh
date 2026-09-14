@@ -90,6 +90,14 @@ check "QML labels render as plain text" \
   test "$(count_matches 'textFormat: Text\.PlainText' BarWidget.qml | wc -l)" -ge 4
 check "plugin QML has no network downloader" \
   test "$(grep -ERn --include='*.qml' '(^|[^[:alnum:]_])(curl|wget|nc|socat)([^[:alnum:]_]|$)' . || true)" = ""
+check "background link no longer uses path-based ln" \
+  test "$(grep -En 'ln[[:space:]]*-[^ ]*nsf|currentBackgroundLink.*ln' Background.qml || true)" = ""
+check "background link uses the descriptor-relative publisher" \
+  has_text Background.qml 'publish-current-background.py'
+check "publisher opens directories without following symlinks" \
+  has_text publish-current-background.py 'os.O_NOFOLLOW'
+check "publisher revalidates the published link" \
+  test "$(grep -En 'revalidate\(directory_fd, uid, target\)' publish-current-background.py | wc -l)" -eq 1
 
 check "safe path accepts a normal absolute path" safe_path "/home/user/Wallpapers"
 
@@ -145,6 +153,30 @@ touch "$payload_folder/payload.jpg"
 payload_output=$(scan_folder "$payload_folder" false)
 check "quoted folder paths remain usable" grep -Fq "$payload_folder/payload.jpg" <<<"$payload_output"
 check "shell metacharacters stay data" test ! -e "$marker"
+
+link_root="$temp_root/link-root"
+mkdir -p "$link_root/owned/current" "$link_root/redirect"
+link_target="$link_root/wallpaper with spaces.jpg"
+touch "$link_target"
+python3 publish-current-background.py "$link_root/owned/current" "$link_target"
+check "publisher creates the managed symlink" \
+  test "$(readlink "$link_root/owned/current/background")" = "$link_target"
+
+ln -s "$link_root/redirect" "$link_root/owned/current-link"
+if python3 publish-current-background.py "$link_root/owned/current-link" "$link_target"; then
+  fail "publisher rejects a symlinked parent directory"
+else
+  pass "publisher rejects a symlinked parent directory"
+fi
+check "rejected publication does not escape into the redirected directory" \
+  test ! -e "$link_root/redirect/background"
+
+chmod g+w "$link_root/owned/current"
+if python3 publish-current-background.py "$link_root/owned/current" "$link_target"; then
+  fail "publisher rejects a group-writable parent directory"
+else
+  pass "publisher rejects a group-writable parent directory"
+fi
 
 if (( failures )); then
   echo "$failures security check(s) failed."

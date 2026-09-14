@@ -47,7 +47,11 @@ Item {
 
   readonly property string home: Quickshell.env("HOME")
   readonly property string stateHome: home + "/.local/state"
+  readonly property string currentBackgroundDirectory: stateHome + "/omarchy/current"
   readonly property string currentBackgroundLink: stateHome + "/omarchy/current/background"
+  readonly property string pythonPath: "/usr/bin/python3"
+  readonly property string linkPublisherPath: decodeURIComponent(
+    String(Qt.resolvedUrl("publish-current-background.py")).replace(/^file:\/\//, ""))
 
   // ------------------------------------------------------------- settings
 
@@ -749,7 +753,10 @@ Item {
     if (!hasServiceContext()) return
     var primary = primaryPick(picks)
     if (!primary) return
-    linkProc.command = ["ln", "-nsf", primary, currentBackgroundLink]
+    // Keep the destination directory pinned by the publisher before changing
+    // anything below it. A path-based `ln` would allow a replaced `current`
+    // directory symlink to redirect the write elsewhere.
+    linkProc.command = [pythonPath, linkPublisherPath, currentBackgroundDirectory, primary]
     linkProc.running = true
   }
 

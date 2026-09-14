@@ -62,4 +62,6 @@ assert.match(source, /Variants\s*\{\s*model: root\.serviceActive \? Quickshell\.
 assert.match(source, /running: root\.serviceActive && !root\.folderMode/);
 assert.match(source, /running: root\.serviceActive && root\.folderMode && root\.intervalSec > 0/);
 assert.match(source, /onServiceActiveChanged:\s*\{\s*if \(serviceActive\) configReload\.restart\(\)/);
+assert.match(source, /publish-current-background\.py/);
+assert.doesNotMatch(source, /\["ln",\s*"-nsf"/);
 console.log('Background lifecycle checks passed (uninitialized, compatibility copy, host injection, theme and folder modes).');
