@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.0](https://github.com/guiestrela/wallpaper-omarchy-manager/compare/v1.3.3...v1.4.0) (2026-09-14)
+
+
+### Features
+
+* implement atomic wallpaper link publication and security checks ([7c7bfd4](https://github.com/guiestrela/wallpaper-omarchy-manager/commit/7c7bfd4f3fed9632beb174bc6073bcb226400124))
+
 ## [1.3.3](https://github.com/guiestrela/wallpaper-omarchy-manager/compare/v1.3.2...v1.3.3) (2026-09-10)
 
 
