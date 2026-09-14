@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.1](https://github.com/guiestrela/wallpaper-omarchy-manager/compare/v1.4.0...v1.4.1) (2026-09-14)
+
+
+### Bug Fixes
+
+* preserve wallpaper aspect ratio during decode ([13dc290](https://github.com/guiestrela/wallpaper-omarchy-manager/commit/13dc290fa8db8a3701ff71cee60a8aa4973fc478))
+
 ## [1.4.0](https://github.com/guiestrela/wallpaper-omarchy-manager/compare/v1.3.3...v1.4.0) (2026-09-14)
 
 
