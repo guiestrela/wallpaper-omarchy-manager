@@ -10,14 +10,18 @@ const functions = [
   'applyGlobal', 'refreshBackground', 'transitionBackgroundWithTheme',
   'openSelector', 'openThemeSwitcher',
 ];
-const code = functions.map(name => {
+const sourceTrackingFunctions = [
+  'pinnedLogicalReferences', 'rendererUsesSnapshot', 'updateRendererSource',
+  'samePathMap', 'pruneStagedPinnedPaths',
+];
+const code = [...functions, ...sourceTrackingFunctions].map(name => {
   const match = source.match(new RegExp(`^  function ${name}\\([^\\n]*\\) \\{[\\s\\S]*?^  \\}`, 'm'));
   assert.ok(match, `QML function ${name} exists`);
   return match[0];
 }).join('\n');
 
-function service(shell, manifest = { id: 'wallpaper' }) {
-  const context = vm.createContext({ shell, manifest });
+function service(shell, manifest = { id: 'wallpaper' }, initialState = {}) {
+  const context = vm.createContext({ ...initialState, shell, manifest });
   vm.runInContext(code, context);
   return context;
 }
@@ -56,12 +60,42 @@ configured.refreshBackground();
 assert.equal(shuffled, true);
 assert.equal(configured.readlinkProc.running, false);
 
+// A no-op prune must not replace the map read by WallpaperRenderer.sourcePath.
+// Reassigning an equal object needlessly invalidates that binding from inside
+// onSourcePathChanged -> updateRendererSource -> pruneStagedPinnedPaths.
+const pinLogicalPath = '/wallpapers/pinned.jpg';
+const pinFolder = '/wallpapers';
+const pinMapKey = JSON.stringify([pinFolder, pinLogicalPath]);
+const rendererKey = JSON.stringify(['DP-1', 'slotA']);
+const snapshotPath = '/cache/pinned-snapshot.jpg';
+const sourceTracking = service({ barConfig: {} }, { id: 'wallpaper' }, {
+  serviceActive: true,
+  displayedMap: ({}), incomingMap: ({}), oldMap: ({}),
+  slotAMap: ({ 'DP-1': pinLogicalPath }), slotBMap: ({}),
+  screenNames: () => ['DP-1'],
+  configFor: () => ({ mode: 'single', pinned: pinLogicalPath, folder: pinFolder }),
+  stagedPinnedPaths: ({ [pinMapKey]: snapshotPath }),
+  stagedPinnedLeaseTokens: ({ [pinMapKey]: 'lease-token' }),
+  rendererSourcePaths: ({ [rendererKey]: snapshotPath }),
+  currentLinkSnapshotPath: '', pendingCurrentLinkSnapshotPath: '',
+  inFlightCurrentLinkSnapshotPath: '', uncertainCurrentLinkSnapshotPaths: [],
+  pendingPinnedLeaseReleases: [], pinnedLeaseReleaseTimer: { restart() {} },
+});
+const stagedMapBeforeNoopPrune = sourceTracking.stagedPinnedPaths;
+sourceTracking.pruneStagedPinnedPaths();
+assert.equal(sourceTracking.stagedPinnedPaths, stagedMapBeforeNoopPrune,
+  'a no-op renderer-source prune must preserve stagedPinnedPaths identity');
+
 // The lifecycle guard also controls declarative side effects, not only JS.
 assert.match(source, /IpcHandler\s*\{\s*enabled: root\.serviceActive\s*target: "background"/);
 assert.match(source, /Variants\s*\{\s*model: root\.serviceActive \? Quickshell\.screens : \[\]/);
 assert.match(source, /running: root\.serviceActive && !root\.folderMode/);
 assert.match(source, /running: root\.serviceActive && root\.folderMode && root\.intervalSec > 0/);
-assert.match(source, /onServiceActiveChanged:\s*\{\s*if \(serviceActive\) configReload\.restart\(\)/);
+assert.match(source, /onServiceActiveChanged:\s*\{\s*if \(serviceActive\) \{\s*if \(hasFolder\(\)\) prepareCurrentLinkState\(\)\s*root\.renewPinnedLeaseSnapshots\(\)\s*configReload\.restart\(\)/);
+assert.match(source, /onServiceActiveChanged:[\s\S]*?else root\.deactivateService\(\)/,
+  'the service inactive transition invokes explicit teardown');
+assert.doesNotMatch(source, /\blinkProc\.running\s*=\s*false/,
+  'an in-flight atomic background-link publication must complete and reconcile before any lease is pruned');
 assert.match(source, /publish-current-background\.py/);
 assert.doesNotMatch(source, /\["ln",\s*"-nsf"/);
 console.log('Background lifecycle checks passed (uninitialized, compatibility copy, host injection, theme and folder modes).');

@@ -72,8 +72,8 @@ check "service uses scoped barConfig instead of shellConfig" \
   has_text Background.qml 'lookupSettings(shell ? shell.barConfig : null, pluginId)'
 check "service does not access private shellConfig" \
   test "$(grep -En 'shell\.shellConfig' Background.qml || true)" = ""
-check "both scanners quote the configured folder" \
-  test "$(count_matches 'find -P.*Util\.shellQuote' Background.qml BarWidget.qml | wc -l)" -eq 2
+check "both scanners check the directory before find" \
+  test "$(count_matches 'test -d.*find -P' Background.qml BarWidget.qml | wc -l)" -eq 2
 check "both scanners stay on one filesystem" \
   test "$(count_matches ' -xdev' Background.qml BarWidget.qml | wc -l)" -eq 2
 check "both scanners have bounded depth" \
@@ -176,6 +176,20 @@ if python3 publish-current-background.py "$link_root/owned/current" "$link_targe
   fail "publisher rejects a group-writable parent directory"
 else
   pass "publisher rejects a group-writable parent directory"
+fi
+
+check "QML scanner argument-guard regression" node .github/scripts/find-guard-check.mjs
+check "pinned symlink confinement regression" node .github/scripts/pinned-path-check.mjs
+check "pinned media descriptor-open race regression" env PYTHONDONTWRITEBYTECODE=1 python3 .github/tests/pinned_media_staging_check.py
+check "pinned QML snapshot handoff regression" node .github/scripts/pinned-staging-wiring-check.mjs
+check "thumbnail renderer lifecycle regression" node .github/scripts/renderer-lifecycle-check.mjs
+check "single QML bar IPC owner" node .github/scripts/bar-widget-duplicate-handler-check.mjs
+if command -v c++ >/dev/null 2>&1 && command -v pkg-config >/dev/null 2>&1 \
+  && pkg-config --exists Qt6Qml Qt6Quick Qt6Gui Qt6Multimedia; then
+  check "Qt runtime renderer lifecycle regression" node .github/scripts/renderer-runtime-lifecycle-check.mjs
+  check "Qt runtime video readiness and transition regression" node .github/scripts/renderer-video-readiness-check.mjs
+else
+  printf '  SKIP  Qt runtime renderer lifecycle and video readiness (Qt6 development packages unavailable)\\n'
 fi
 
 if (( failures )); then

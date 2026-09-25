@@ -46,12 +46,19 @@ Item {
   }
 
   readonly property string home: Quickshell.env("HOME")
+  readonly property string stagingCacheRoot: {
+    var configured = String(Quickshell.env("XDG_CACHE_HOME") || "")
+    var base = configured.startsWith("/") ? configured.replace(/\/+$/, "") : home + "/.cache"
+    return base + "/omarchy/wallpaperomarchymanager/pinned"
+  }
   readonly property string stateHome: home + "/.local/state"
   readonly property string currentBackgroundDirectory: stateHome + "/omarchy/current"
   readonly property string currentBackgroundLink: stateHome + "/omarchy/current/background"
   readonly property string pythonPath: "/usr/bin/python3"
   readonly property string linkPublisherPath: decodeURIComponent(
     String(Qt.resolvedUrl("publish-current-background.py")).replace(/^file:\/\//, ""))
+  readonly property string pinStagerPath: decodeURIComponent(
+    String(Qt.resolvedUrl("stage-pinned-media.py")).replace(/^file:\/\//, ""))
 
   // ------------------------------------------------------------- settings
 
@@ -271,7 +278,7 @@ Item {
   // prevents an accidental paste from creating an oversized command line.
   function safePath(path) {
     var value = expandHome(String(path || "").trim())
-    if (value.length > 4096 || /[\u0000-\u001f\u007f-\u009f]/.test(value)) return ""
+    if (value.length > 4096 || !value.startsWith("/") || /^[a-z][a-z0-9+.-]*:/i.test(value) || /[\u0000-\u001f\u007f-\u009f]/.test(value)) return ""
     return value
   }
 
@@ -339,12 +346,305 @@ Item {
   // poolKey -> [paths]. One entry per distinct folder in use, so two displays
   // pointed at the same folder share both the pool and the deal queue below.
   property var pools: ({})
+  // Pool freshness is consumed after pin selection; a later use rescans.
+  property bool pinnedPoolFresh: false
+  // Pins remain logical in transition maps; Qt receives only a private staged
+  // snapshot path after the no-follow helper has opened the source.
+  property var stagedPinnedPaths: ({})
+  property var stagedPinnedLeaseTokens: ({})
+  property var pendingPinnedLeaseReleases: []
+  property var inFlightPinnedLeaseReleases: []
+  property int pinnedLeaseReleaseRetryCount: 0
+  property int pinnedLeaseRenewalFailures: 0
+  property bool pinnedLeaseRenewalUnavailable: false
+  property var rendererSourcePaths: ({})
+  property var failedPinnedPaths: ({})
+  property string currentLinkSnapshotPath: ""
+  property string pendingCurrentLinkSnapshotPath: ""
+  property string inFlightCurrentLinkSnapshotPath: ""
+  property var uncertainCurrentLinkSnapshotPaths: []
+  property bool currentLinkStateReady: false
+  property string stagingPinFolder: ""
+  property string stagingPinPath: ""
+
 
   function poolFor(key) { return pools[key] || [] }
 
   function usablePoolFor(key) {
     var bad = badImages
     return poolFor(key).filter(function(p) { return !bad[p] })
+  }
+
+  function hasPinned() {
+    var names = screenNames()
+    for (var i = 0; i < names.length; i++) {
+      var cfg = configFor(names[i])
+      if (cfg.mode === "single" && cfg.pinned !== "") return true
+    }
+    return false
+  }
+
+  function pinnedStageKey(folder, pinned) {
+    return JSON.stringify([folder, pinned])
+  }
+
+  function pinnedLogicalReferences() {
+    var referenced = ({})
+    var maps = serviceActive ? [displayedMap, incomingMap, oldMap, slotAMap, slotBMap] : []
+    for (var m = 0; m < maps.length; m++)
+      for (var screen in maps[m]) if (maps[m][screen]) referenced[String(maps[m][screen])] = true
+    if (serviceActive) {
+      var names = screenNames()
+      for (var i = 0; i < names.length; i++) {
+        var cfg = configFor(names[i])
+        if (cfg.mode === "single" && cfg.pinned) referenced[String(cfg.pinned)] = true
+      }
+    }
+    return referenced
+  }
+
+  function activeStagedSnapshots() {
+    var referenced = pinnedLogicalReferences()
+    var active = []
+    for (var key in stagedPinnedPaths) {
+      try {
+        var parts = JSON.parse(key)
+        var path = String(stagedPinnedPaths[key] || "")
+        if ((referenced[String(parts[1])] || path === currentLinkSnapshotPath
+             || path === pendingCurrentLinkSnapshotPath) && path && active.indexOf(path) === -1)
+          active.push(path)
+      } catch (e) {}
+    }
+    var linkPaths = [currentLinkSnapshotPath, pendingCurrentLinkSnapshotPath, inFlightCurrentLinkSnapshotPath]
+      .concat(uncertainCurrentLinkSnapshotPaths)
+    for (var linkIndex = 0; linkIndex < linkPaths.length; linkIndex++) {
+      var linkPath = String(linkPaths[linkIndex] || "")
+      if (isStagedSnapshotPath(linkPath) && active.indexOf(linkPath) === -1) active.push(linkPath)
+    }
+    for (var rendererKey in rendererSourcePaths) {
+      var rendererPath = String(rendererSourcePaths[rendererKey] || "")
+      if (isStagedSnapshotPath(rendererPath) && active.indexOf(rendererPath) === -1) active.push(rendererPath)
+    }
+    return active
+  }
+
+  function rendererUsesSnapshot(path) {
+    for (var key in rendererSourcePaths) if (rendererSourcePaths[key] === path) return true
+    return false
+  }
+
+  function updateRendererSource(screen, slot, path) {
+    var key = JSON.stringify([String(screen), String(slot)])
+    var next = ({})
+    for (var existing in rendererSourcePaths) next[existing] = rendererSourcePaths[existing]
+    if (path) next[key] = String(path)
+    else delete next[key]
+    rendererSourcePaths = next
+    pruneStagedPinnedPaths()
+  }
+
+  function samePathMap(left, right) {
+    var leftKeys = Object.keys(left)
+    var rightKeys = Object.keys(right)
+    if (leftKeys.length !== rightKeys.length) return false
+    for (var i = 0; i < leftKeys.length; i++) {
+      var key = leftKeys[i]
+      if (!Object.prototype.hasOwnProperty.call(right, key) || left[key] !== right[key]) return false
+    }
+    return true
+  }
+
+  function pruneStagedPinnedPaths() {
+    var referenced = pinnedLogicalReferences()
+    var next = ({})
+    var nextLeases = ({})
+    var retainedTokens = []
+    var releases = []
+    for (var key in stagedPinnedPaths) {
+      try {
+        if (referenced[String(JSON.parse(key)[1])] || stagedPinnedPaths[key] === currentLinkSnapshotPath
+            || stagedPinnedPaths[key] === pendingCurrentLinkSnapshotPath
+            || stagedPinnedPaths[key] === inFlightCurrentLinkSnapshotPath
+            || uncertainCurrentLinkSnapshotPaths.indexOf(stagedPinnedPaths[key]) !== -1
+            || rendererUsesSnapshot(stagedPinnedPaths[key])) {
+          next[key] = stagedPinnedPaths[key]
+          if (stagedPinnedLeaseTokens[key]) {
+            nextLeases[key] = stagedPinnedLeaseTokens[key]
+            retainedTokens.push(stagedPinnedLeaseTokens[key])
+          }
+        } else if (stagedPinnedLeaseTokens[key]) {
+          releases.push({ path: stagedPinnedPaths[key], lease: stagedPinnedLeaseTokens[key] })
+        }
+      } catch (e) {}
+    }
+    if (!samePathMap(stagedPinnedPaths, next)) stagedPinnedPaths = next
+    stagedPinnedLeaseTokens = nextLeases
+    pendingPinnedLeaseReleases = pendingPinnedLeaseReleases.filter(function(item) {
+      return retainedTokens.indexOf(item.lease) === -1
+    }).concat(releases)
+    if (pendingPinnedLeaseReleases.length) pinnedLeaseReleaseTimer.restart()
+  }
+
+  function flushPinnedLeaseReleases() {
+    if (pinLeaseReleaseProc.running || !pendingPinnedLeaseReleases.length) return
+    var batch = pendingPinnedLeaseReleases.slice()
+    pendingPinnedLeaseReleases = []
+    inFlightPinnedLeaseReleases = batch
+    pinLeaseReleaseProc.command = [pythonPath, pinStagerPath, "--release", JSON.stringify(batch)]
+    pinLeaseReleaseProc.running = true
+  }
+
+  function finishPinnedLeaseRelease(exitCode) {
+    if (exitCode === 0) {
+      inFlightPinnedLeaseReleases = []
+      pinnedLeaseReleaseRetryCount = 0
+      if (pendingPinnedLeaseReleases.length) pinnedLeaseReleaseTimer.restart()
+      return
+    }
+    pendingPinnedLeaseReleases = inFlightPinnedLeaseReleases.concat(pendingPinnedLeaseReleases)
+    inFlightPinnedLeaseReleases = []
+    if (pinnedLeaseReleaseRetryCount === 0) {
+      pinnedLeaseReleaseRetryCount = 1
+      pinnedLeaseReleaseTimer.restart()
+    } else {
+      pinnedLeaseReleaseRetryCount = 0
+      console.warn("Wallpaper Manager: lease release failed twice; keeping cache snapshots protected")
+    }
+  }
+
+  function isStagedSnapshotPath(path) {
+    var value = safePath(path)
+    var rootPath = stagingCacheRoot.replace(/\/+$/, "") + "/"
+    if (!value.startsWith(rootPath)) return false
+    return /^[a-f0-9]{64}\/media\.[a-z0-9]{1,12}$/.test(value.substring(rootPath.length))
+  }
+
+  function renewPinnedLeaseSnapshots() {
+    if (!serviceActive || pinLeaseRenewProc.running) return
+    var leases = []
+    for (var key in stagedPinnedPaths) {
+      var path = String(stagedPinnedPaths[key] || "")
+      var lease = String(stagedPinnedLeaseTokens[key] || "")
+      if (isStagedSnapshotPath(path) && /^[a-f0-9]{32}$/.test(lease))
+        leases.push({ path: path, lease: lease })
+    }
+    if (!leases.length) {
+      pinnedLeaseRenewalUnavailable = false
+      pinnedLeaseRenewalFailures = 0
+      pinnedLeaseRenewRetryTimer.stop()
+      return
+    }
+    pinLeaseRenewProc.command = [pythonPath, pinStagerPath, "--renew", JSON.stringify(leases)]
+    pinLeaseRenewProc.running = true
+  }
+
+  function finishPinnedLeaseRenewal(exitCode) {
+    if (exitCode === 0) {
+      pinnedLeaseRenewalFailures = 0
+      pinnedLeaseRenewalUnavailable = false
+      pinnedLeaseRenewRetryTimer.stop()
+      return
+    }
+    if (!serviceActive) return
+    pinnedLeaseRenewalUnavailable = true
+    if (pinnedLeaseRenewalFailures === 0) {
+      pinnedLeaseRenewalFailures = 1
+      pinnedLeaseRenewRetryTimer.restart()
+    } else {
+      pinnedLeaseRenewalFailures = 0
+      console.warn("Wallpaper Manager: lease renewal failed twice; snapshots will expire unless renderer paths are still active")
+    }
+  }
+
+  function ensurePinnedMedia() {
+    if (!currentLinkStateReady) return false
+    if (pinStageProc.running) return false
+    if (pinnedLeaseRenewalUnavailable && Object.keys(stagedPinnedPaths).length) return false
+    var names = screenNames()
+    for (var i = 0; i < names.length; i++) {
+      var cfg = configFor(names[i])
+      if (cfg.mode !== "single" || cfg.pinned === "") continue
+      if (usablePoolFor(poolKeyFor(names[i])).indexOf(cfg.pinned) === -1) continue
+      var key = pinnedStageKey(cfg.folder, cfg.pinned)
+      if (stagedPinnedPaths[key] || failedPinnedPaths[key]) continue
+      stagingPinFolder = cfg.folder
+      stagingPinPath = cfg.pinned
+      pinStageProc.command = [pythonPath, pinStagerPath, cfg.folder, cfg.pinned, JSON.stringify(activeStagedSnapshots())]
+      pinStageProc.running = true
+      return false
+    }
+    return true
+  }
+
+  function prepareCurrentLinkState() {
+    if (!hasFolder()) {
+      currentLinkStateReady = true
+      return
+    }
+    currentLinkStateReady = false
+    if (!readlinkProc.running) readlinkProc.running = true
+  }
+
+  function renderPathFor(logicalPath) {
+    var path = String(logicalPath || "")
+    if (!path) return ""
+    var names = screenNames()
+    var configuredPin = false
+    for (var i = 0; i < names.length; i++) {
+      var cfg = configFor(names[i])
+      if (cfg.pinned === path && cfg.folder !== "") {
+        configuredPin = true
+        var staged = stagedPinnedPaths[pinnedStageKey(cfg.folder, path)]
+        if (staged) return staged
+      }
+    }
+    // Keep a prior snapshot available while a changed pin transitions out.
+    for (var key in stagedPinnedPaths) {
+      try { if (JSON.parse(key)[1] === path) return stagedPinnedPaths[key] } catch (e) {}
+    }
+    if (configuredPin) return ""
+    return path
+  }
+
+  function finishPinnedStage(exitCode, output) {
+    var key = pinnedStageKey(stagingPinFolder, stagingPinPath)
+    var result = ({})
+    try { result = JSON.parse(String(output || "").trim()) } catch (e) {}
+    if (!result || typeof result !== "object") result = ({})
+    var staged = safePath(String(result.path || ""))
+    var lease = String(result.lease || "")
+    if (!serviceActive) {
+      if (isStagedSnapshotPath(staged) && /^[a-f0-9]{32}$/.test(lease)) {
+        pendingPinnedLeaseReleases = pendingPinnedLeaseReleases.concat([{ path: staged, lease: lease }])
+        pinnedLeaseReleaseTimer.restart()
+      }
+      stagingPinFolder = ""
+      stagingPinPath = ""
+      return
+    }
+    var next = ({})
+    if (exitCode === 0 && staged !== "" && isStagedSnapshotPath(staged)
+        && /^[a-f0-9]{32}$/.test(lease)) {
+      for (var existing in stagedPinnedPaths) next[existing] = stagedPinnedPaths[existing]
+      next[key] = staged
+      stagedPinnedPaths = next
+      var nextLeases = ({})
+      for (var leaseKey in stagedPinnedLeaseTokens) nextLeases[leaseKey] = stagedPinnedLeaseTokens[leaseKey]
+      nextLeases[key] = lease
+      stagedPinnedLeaseTokens = nextLeases
+    } else {
+      if (isStagedSnapshotPath(staged) && /^[a-f0-9]{32}$/.test(lease)) {
+        pendingPinnedLeaseReleases = pendingPinnedLeaseReleases.concat([{ path: staged, lease: lease }])
+        pinnedLeaseReleaseTimer.restart()
+      }
+      for (var failed in failedPinnedPaths) next[failed] = failedPinnedPaths[failed]
+      next[key] = true
+      failedPinnedPaths = next
+      console.warn("wallpaperOmarchyManager: pinned media snapshot failed or was outside the configured private cache; pin ignored")
+    }
+    stagingPinFolder = ""
+    stagingPinPath = ""
+    Qt.callLater(function() { root.shuffle(false) })
   }
 
   // Every usable image across every pool, for the status readout. Deduped:
@@ -371,6 +671,8 @@ Item {
 
   function rescan() {
     if (!hasServiceContext()) return
+    pinnedPoolFresh = false
+    failedPinnedPaths = ({})
     // Clearing the skip list here makes a rescan the way to retry a file that
     // has since been repaired or replaced. The cost of being wrong is one
     // failed decode, after which it is skipped again.
@@ -390,6 +692,7 @@ Item {
     if (scanProc.running) return
     if (!scanQueue.length) {
       poolLoaded = true
+      pinnedPoolFresh = true
       if (hasFolder()) shuffle(displayedIsEmpty())
       return
     }
@@ -400,15 +703,11 @@ Item {
     // name must not be mistaken for a record separator. Convert to newlines
     // only after control-bearing names have been removed; StdioCollector
     // receives the resulting safe, newline-delimited string.
+    var folder = safePath(poolKeyFolder(key))
+    if (folder === "") { drainScans(); return }
     scanProc.command = ["bash", "-c",
-      // Do not follow symlinks: a link inside the selected folder must not
-      // make a scan escape that folder (or walk a loop/another filesystem).
-      "timeout --kill-after=1s 15s find -P " + Util.shellQuote(poolKeyFolder(key)) +
-      " -xdev" + (poolKeyRecursive(key) ? " -maxdepth 32" : " -maxdepth 1") +
-      " -type f \\( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif'" +
-      " -o -iname '*.mp4' -o -iname '*.webm' -o -iname '*.mkv' -o -iname '*.mov' -o -iname '*.avi'" +
-      " -o -iname '*.bmp' -o -iname '*.webp' \\) -print0 2>/dev/null | LC_ALL=C grep -zav '[[:cntrl:]]'" +
-      " | LC_ALL=C.UTF-8 grep -zavP '[\\x{80}-\\x{9f}]' | tr '\\0' '\\n' | head -n 10000 | sort -u"]
+      "test -d \"$1\" || exit 0; exec timeout --kill-after=1s 15s find -P \"$1\" -xdev $2 -type f \\\( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif' -o -iname '*.mp4' -o -iname '*.webm' -o -iname '*.mkv' -o -iname '*.mov' -o -iname '*.avi' -o -iname '*.bmp' -o -iname '*.webp' \\\) -print0 2>/dev/null | LC_ALL=C grep -zav '[[:cntrl:]]' | LC_ALL=C.UTF-8 grep -zavP '[\\x{80}-\\x{9f}]' | tr '\\0' '\\n' | head -n 10000 | sort -u",
+      "wpm-scan", folder, poolKeyRecursive(key) ? "-maxdepth 32" : "-maxdepth 1"]
     scanProc.running = true
   }
 
@@ -621,7 +920,13 @@ Item {
       var name = names[i]
       var cfg = configFor(name)
       if (cfg.mode === "single") {
-        if (cfg.pinned !== "") picks[name] = cfg.pinned
+        // `configFor` only proves lexical containment. A pin must also be an
+        // exact regular-file result from the current non-following scan.
+        var pinKey = poolKeyFor(name)
+        var stageKey = pinnedStageKey(cfg.folder, cfg.pinned)
+        if (cfg.pinned !== "" && usablePoolFor(pinKey).indexOf(cfg.pinned) !== -1
+            && stagedPinnedPaths[stageKey])
+          picks[name] = cfg.pinned
         continue
       }
       var key = poolKeyFor(name)
@@ -655,6 +960,11 @@ Item {
     if (!hasServiceContext()) return
     if (!hasFolder()) return
     if (!poolLoaded) { rescan(); return }
+    if (hasPinned()) {
+      if (!pinnedPoolFresh) { rescan(); return }
+      if (!ensurePinnedMedia()) return
+      pinnedPoolFresh = false
+    }
     var picks = pickForScreens()
     var empty = true
     for (var k in picks) { empty = false; break }
@@ -751,13 +1061,35 @@ Item {
   // symlink, so keep it pointed at something we are actually showing.
   function syncCurrentLink(picks) {
     if (!hasServiceContext()) return
-    var primary = primaryPick(picks)
+    var primary = renderPathFor(primaryPick(picks))
     if (!primary) return
+    pendingCurrentLinkSnapshotPath = primary
+    startCurrentLinkPublication()
+  }
+
+  function startCurrentLinkPublication() {
+    if (linkProc.running || !pendingCurrentLinkSnapshotPath) return
+    inFlightCurrentLinkSnapshotPath = pendingCurrentLinkSnapshotPath
+    pendingCurrentLinkSnapshotPath = ""
     // Keep the destination directory pinned by the publisher before changing
     // anything below it. A path-based `ln` would allow a replaced `current`
     // directory symlink to redirect the write elsewhere.
-    linkProc.command = [pythonPath, linkPublisherPath, currentBackgroundDirectory, primary]
+    linkProc.command = [pythonPath, linkPublisherPath, currentBackgroundDirectory, inFlightCurrentLinkSnapshotPath]
     linkProc.running = true
+  }
+
+  function finishCurrentLinkPublication(exitCode) {
+    var completed = inFlightCurrentLinkSnapshotPath
+    if (exitCode === 0) {
+      currentLinkSnapshotPath = completed
+      uncertainCurrentLinkSnapshotPaths = []
+    } else if (isStagedSnapshotPath(completed)
+               && uncertainCurrentLinkSnapshotPaths.indexOf(completed) === -1) {
+      uncertainCurrentLinkSnapshotPaths = uncertainCurrentLinkSnapshotPaths.concat([completed])
+    }
+    inFlightCurrentLinkSnapshotPath = ""
+    if (pendingCurrentLinkSnapshotPath) startCurrentLinkPublication()
+    pruneStagedPinnedPaths()
   }
 
   // omarchy-theme-set rewrites the current-background symlink after the theme
@@ -773,7 +1105,48 @@ Item {
     syncCurrentLink(picks)
   }
 
-  Process { id: linkProc }
+  Process {
+    id: linkProc
+    onExited: function(exitCode, exitStatus) { root.finishCurrentLinkPublication(exitCode) }
+  }
+
+  Process {
+    id: pinLeaseReleaseProc
+    onExited: function(exitCode, exitStatus) { root.finishPinnedLeaseRelease(exitCode) }
+  }
+
+  Process {
+    id: pinLeaseRenewProc
+    onExited: function(exitCode, exitStatus) { root.finishPinnedLeaseRenewal(exitCode) }
+  }
+
+  Timer {
+    id: pinnedLeaseRenewTimer
+    interval: 12 * 60 * 60 * 1000
+    repeat: true
+    running: root.serviceActive
+    onTriggered: root.renewPinnedLeaseSnapshots()
+  }
+
+  Timer {
+    id: pinnedLeaseRenewRetryTimer
+    interval: 60 * 1000
+    repeat: false
+    onTriggered: root.renewPinnedLeaseSnapshots()
+  }
+
+  Timer {
+    id: pinnedLeaseReleaseTimer
+    interval: 1000
+    repeat: false
+    onTriggered: root.flushPinnedLeaseReleases()
+  }
+
+  Process {
+    id: pinStageProc
+    stdout: StdioCollector { id: pinStageOutput; waitForEnd: true }
+    onExited: function(exitCode, exitStatus) { root.finishPinnedStage(exitCode, pinStageOutput.text) }
+  }
 
   Timer {
     id: folderLinkRepairTimer
@@ -831,6 +1204,7 @@ Item {
       slotBMap = ({})
       frontSlot = 0
       revealProgress = 1
+      pruneStagedPinnedPaths()
       return
     }
 
@@ -1004,8 +1378,11 @@ Item {
     command: ["readlink", "-f", root.currentBackgroundLink]
     stdout: StdioCollector {
       onStreamFinished: {
-        if (root.hasFolder()) return
-        root.applyGlobal("", String(text || "").trim(), String(text || "").trim(), false, false)
+        var linkedPath = String(text || "").trim()
+        if (root.isStagedSnapshotPath(linkedPath)) root.currentLinkSnapshotPath = linkedPath
+        root.currentLinkStateReady = true
+        if (root.hasFolder()) { root.shuffle(false); return }
+        root.applyGlobal("", linkedPath, linkedPath, false, false)
       }
     }
   }
@@ -1138,25 +1515,44 @@ Item {
       root.incomingMap = ({})
       root.oldMap = ({})
       root.revealProgress = 1
+      root.pruneStagedPinnedPaths()
     }
   }
 
   // Anything that changes which images belong in which pool. Debounced into
   // one rebuild: editing a folder field emits a change per keystroke, and a
   // single panel action can write several keys in a row.
-  onDisplayConfigKeyChanged: configReload.restart()
-  onPerDisplayConfigChanged: configReload.restart()
-  onFolderChanged: configReload.restart()
+  onDisplayConfigKeyChanged: { pinnedPoolFresh = false; configReload.restart() }
+  onPerDisplayConfigChanged: { pinnedPoolFresh = false; configReload.restart() }
+  onFolderChanged: { pinnedPoolFresh = false; configReload.restart() }
   onPerDisplayChanged: if (hasFolder()) shuffle(false)
 
+  function deactivateService() {
+    configReload.stop()
+    scanProc.running = false
+    readlinkProc.running = false
+    pinnedLeaseRenewRetryTimer.stop()
+    pendingCurrentLinkSnapshotPath = ""
+    // PanelWindow variants are removed synchronously by serviceActive; defer
+    // clearing renderer references until their sourcePath bindings have settled.
+    Qt.callLater(function() {
+      displayedMap = ({})
+      incomingMap = ({})
+      oldMap = ({})
+      slotAMap = ({})
+      slotBMap = ({})
+      rendererSourcePaths = ({})
+      root.pruneStagedPinnedPaths()
+    })
+  }
+
   onServiceActiveChanged: {
-    if (serviceActive) configReload.restart()
-    else {
-      configReload.stop()
-      scanProc.running = false
-      readlinkProc.running = false
-      linkProc.running = false
+    if (serviceActive) {
+      if (hasFolder()) prepareCurrentLinkState()
+      root.renewPinnedLeaseSnapshots()
+      configReload.restart()
     }
+    else root.deactivateService()
   }
 
   Timer {
@@ -1182,7 +1578,10 @@ Item {
 
   Component.onCompleted: {
     if (!hasServiceContext()) return
-    if (hasFolder()) rescan()
+    if (hasFolder()) {
+      prepareCurrentLinkState()
+      rescan()
+    }
     else refreshBackground()
   }
 
@@ -1246,7 +1645,8 @@ Item {
         z: 1
         width: root.scaledW(panel.scaling, implicitWidth, implicitHeight, parent.width, parent.height)
         height: root.scaledH(panel.scaling, implicitWidth, implicitHeight, parent.width, parent.height)
-        sourcePath: panel.oldPath
+        sourcePath: root.renderPathFor(panel.oldPath)
+        onSourcePathChanged: root.updateRendererSource(panel.screenKey, "old", sourcePath)
         fillModeName: panel.scaling
         playing: visible
         visible: panel.oldPath !== "" && root.revealProgress < 1
@@ -1273,7 +1673,8 @@ Item {
           anchors.centerIn: parent
           width: root.scaledW(panel.scaling, implicitWidth, implicitHeight, parent.width, parent.height)
           height: root.scaledH(panel.scaling, implicitWidth, implicitHeight, parent.width, parent.height)
-          sourcePath: panel.slotAPath
+          sourcePath: root.renderPathFor(panel.slotAPath)
+          onSourcePathChanged: root.updateRendererSource(panel.screenKey, "slotA", sourcePath)
           fillModeName: panel.scaling
           playing: frameALayer.visible
           onWallpaperReady: panel.reportIncomingReady()
@@ -1302,7 +1703,8 @@ Item {
           anchors.centerIn: parent
           width: root.scaledW(panel.scaling, implicitWidth, implicitHeight, parent.width, parent.height)
           height: root.scaledH(panel.scaling, implicitWidth, implicitHeight, parent.width, parent.height)
-          sourcePath: panel.slotBPath
+          sourcePath: root.renderPathFor(panel.slotBPath)
+          onSourcePathChanged: root.updateRendererSource(panel.screenKey, "slotB", sourcePath)
           fillModeName: panel.scaling
           playing: frameBLayer.visible
           onWallpaperReady: panel.reportIncomingReady()

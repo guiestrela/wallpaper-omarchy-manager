@@ -12,6 +12,8 @@ Item {
   property string fillModeName: "zoom"
   property bool ready: false
   property bool playing: true
+  property bool preparing: false
+  property bool loadMedia: true
   function isVideoPath(path) {
     var value = String(path || "").toLowerCase()
     return [".mp4", ".webm", ".mkv", ".mov", ".avi"].some(function(ext) {
@@ -29,7 +31,7 @@ Item {
   Loader {
     id: renderer
     anchors.fill: parent
-    active: root.sourcePath !== ""
+    active: root.loadMedia && root.sourcePath !== ""
     sourceComponent: root.videoMode ? videoComponent : imageComponent
   }
 
@@ -40,7 +42,13 @@ Item {
     // the image decoder during a source change.
     renderer.active = false
     renderer.sourceComponent = isVideoPath(sourcePath) ? videoComponent : imageComponent
-    renderer.active = sourcePath !== ""
+    renderer.active = loadMedia && sourcePath !== ""
+  }
+
+  onLoadMediaChanged: {
+    ready = false
+    renderer.active = false
+    renderer.active = loadMedia && sourcePath !== ""
   }
 
   Component {
@@ -72,27 +80,52 @@ Item {
   Component {
     id: videoComponent
 
-    Video {
+    Item {
       id: video
       anchors.fill: parent
-      source: root.videoMode ? Util.fileUrl(root.sourcePath) : ""
-      fillMode: root.fillModeName === "zoom"
-        ? VideoOutput.PreserveAspectCrop : VideoOutput.Stretch
-      autoPlay: root.playing
-      loops: MediaPlayer.Infinite
-      muted: true
-      onPlaybackStateChanged: {
-        if (playbackState === MediaPlayer.PlayingState) { root.ready = true; root.wallpaperReady() }
+
+      VideoOutput {
+        id: videoOutput
+        anchors.fill: parent
+        fillMode: root.fillModeName === "zoom"
+          ? VideoOutput.PreserveAspectCrop : VideoOutput.Stretch
       }
-      onErrorChanged: {
-        if (error !== MediaPlayer.NoError) root.wallpaperError(root.sourcePath)
+
+      MediaPlayer {
+        id: player
+        source: root.videoMode ? Util.fileUrl(root.sourcePath) : ""
+        autoPlay: root.playing || root.preparing
+        loops: MediaPlayer.Infinite
+        videoOutput: videoOutput
+        audioOutput: AudioOutput { muted: true }
+        onErrorOccurred: function(error, errorString) {
+          if (error !== MediaPlayer.NoError) root.wallpaperError(root.sourcePath)
+        }
       }
-      Component.onCompleted: if (root.playing) play()
+
+      Connections {
+        target: videoOutput.videoSink
+        function onVideoFrameChanged() {
+          if (root.ready || player.mediaStatus === MediaPlayer.NoMedia
+              || videoOutput.sourceRect.width <= 0 || videoOutput.sourceRect.height <= 0) return
+          root.ready = true
+          root.wallpaperReady()
+        }
+      }
+
+      function updatePlayback() {
+        if (root.playing || root.preparing) player.play()
+        else player.pause()
+      }
+
+      Component.onCompleted: updatePlayback()
       Connections {
         target: root
         function onPlayingChanged() {
-          if (root.playing) video.play()
-          else video.pause()
+          video.updatePlayback()
+        }
+        function onPreparingChanged() {
+          video.updatePlayback()
         }
       }
     }

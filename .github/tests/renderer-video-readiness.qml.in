@@ -1,0 +1,128 @@
+import QtQuick
+import QtQuick.Window
+import "../.."
+
+Window {
+  id: testRoot
+  visible: true
+  width: 32
+  height: 32
+
+  property string imageUrl: __WPM_IMAGE_URL__
+  property string videoAUrl: __WPM_VIDEO_A_URL__
+  property string configuredVideoBUrl: __WPM_VIDEO_B_URL__
+  property string videoBUrl: ""
+  property int phase: 0
+  property int ticks: 0
+  property int imageReadyEvents: 0
+  property int videoAReadyEvents: 0
+  property int videoBReadyEvents: 0
+  property bool testCompleted: false
+  property int testExitCode: 0
+
+  WallpaperRenderer {
+    id: frontImage
+    anchors.fill: parent
+    sourcePath: testRoot.imageUrl
+    playing: true
+    visible: true
+    onWallpaperReady: testRoot.imageReadyEvents++
+  }
+
+  WallpaperRenderer {
+    id: incomingA
+    anchors.fill: parent
+    sourcePath: testRoot.videoAUrl
+    playing: false
+    preparing: true
+    visible: false
+    onWallpaperReady: testRoot.videoAReadyEvents++
+  }
+
+  WallpaperRenderer {
+    id: incomingB
+    anchors.fill: parent
+    sourcePath: testRoot.videoBUrl
+    playing: false
+    preparing: false
+    visible: false
+    onWallpaperReady: testRoot.videoBReadyEvents++
+  }
+
+  function fail(message) {
+    testRoot.testCompleted = true
+    testRoot.testExitCode = 1
+    console.error("FAIL: " + message)
+    Qt.quit()
+  }
+
+  function finish() {
+    testRoot.testCompleted = true
+    testRoot.testExitCode = 0
+    Qt.quit()
+  }
+
+  Timer {
+    id: readinessTimer
+    interval: 25
+    repeat: true
+    onTriggered: {
+      testRoot.ticks++
+      if (testRoot.phase === 0) {
+        if (frontImage.ready && incomingA.ready
+            && testRoot.imageReadyEvents > 0 && testRoot.videoAReadyEvents > 0) {
+          if (incomingA.visible || incomingA.playing || !incomingA.preparing) {
+            testRoot.fail("hidden image-to-video preparation changed visible playback state")
+            return
+          }
+          frontImage.visible = false
+          incomingA.preparing = false
+          incomingA.playing = true
+          incomingA.visible = true
+          testRoot.phase = 1
+          testRoot.ticks = 0
+        }
+      } else if (testRoot.phase === 1) {
+        if (frontImage.visible || !incomingA.visible || !incomingA.ready
+            || !incomingA.playing || incomingA.preparing) {
+          testRoot.fail("image-to-video reveal lost readiness or did not start visible playback")
+          return
+        }
+        testRoot.videoBUrl = testRoot.configuredVideoBUrl
+        incomingB.preparing = true
+        testRoot.phase = 2
+        testRoot.ticks = 0
+      } else if (testRoot.phase === 2) {
+        if (incomingB.ready && testRoot.videoBReadyEvents > 0) {
+          if (!incomingA.visible || !incomingA.playing || incomingB.visible
+              || incomingB.playing || !incomingB.preparing) {
+            testRoot.fail("video-to-video preparation disturbed the current video")
+            return
+          }
+          incomingA.playing = false
+          incomingA.visible = false
+          incomingB.preparing = false
+          incomingB.playing = true
+          incomingB.visible = true
+          testRoot.phase = 3
+          testRoot.ticks = 0
+        }
+      } else if (testRoot.phase === 3) {
+        if (incomingA.visible || incomingA.playing || !incomingB.visible
+            || !incomingB.playing || !incomingB.ready || incomingB.preparing) {
+          testRoot.fail("video-to-video reveal lost readiness or left both players active")
+          return
+        }
+        readinessTimer.stop()
+        testRoot.finish()
+        return
+      }
+
+      if (testRoot.ticks > 160) {
+        testRoot.fail("readiness/transition phase timed out: " + testRoot.phase)
+      }
+    }
+  }
+
+  Component.onCompleted: readinessTimer.start()
+}

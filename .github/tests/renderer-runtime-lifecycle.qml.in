@@ -1,0 +1,103 @@
+import QtQuick
+import QtQuick.Window
+import "../.."
+
+Window {
+  id: testRoot
+  visible: true
+  width: 24
+  height: 24
+
+  property string fixtureUrl: __WPM_FIXTURE_URL__
+  property var renderers: []
+  property int phase: 0
+  property int cycle: 0
+  property int ticks: 0
+  property bool testCompleted: false
+  property int testExitCode: 0
+
+  Component {
+    id: rendererComponent
+    WallpaperRenderer {
+      sourcePath: testRoot.fixtureUrl
+      loadMedia: false
+      playing: false
+    }
+  }
+
+  function fail(message) {
+    testRoot.testCompleted = true
+    testRoot.testExitCode = 1
+    console.error("FAIL: " + message)
+    Qt.quit()
+  }
+
+  function all(predicate) {
+    return renderers.every(predicate)
+  }
+
+  function advance() {
+    ticks++
+
+    if (phase === 0) {
+      if (!all(function(item) { return !item.ready && item.implicitWidth === 0 })) {
+        fail("inactive renderers allocated items")
+        return
+      }
+      for (var i = 0; i < 3; i++) renderers[i].loadMedia = true
+      phase = 1
+      ticks = 0
+      return
+    }
+
+    if (phase === 1) {
+      if (renderers.slice(0, 3).every(function(item) { return item.ready && item.implicitWidth > 0 })) {
+        if (renderers.slice(3).some(function(item) { return item.ready || item.implicitWidth > 0 })) {
+          fail("inactive renderers were allocated")
+          return
+        }
+        for (var j = 0; j < 3; j++) renderers[j].loadMedia = false
+        phase = 2
+        ticks = 0
+        return
+      }
+    } else if (phase === 2 && all(function(item) { return !item.ready && item.implicitWidth === 0 })) {
+      cycle++
+      if (cycle === 5) {
+        testRoot.testCompleted = true
+        testRoot.testExitCode = 0
+        Qt.quit()
+        return
+      }
+      for (var k = 0; k < 3; k++) renderers[k].loadMedia = true
+      phase = 1
+      ticks = 0
+      return
+    }
+
+    if (ticks > 100) fail("timed out waiting for renderer lifecycle transition at phase " + phase)
+  }
+
+  Component.onCompleted: {
+    for (var n = 0; n < 8; n++) {
+      var renderer = rendererComponent.createObject(contentItem, {
+        sourcePath: fixtureUrl,
+        loadMedia: false,
+        playing: false
+      })
+      if (!renderer) {
+        fail("could not create WallpaperRenderer instance")
+        return
+      }
+      renderers.push(renderer)
+    }
+    lifecycleTimer.start()
+  }
+
+  Timer {
+    id: lifecycleTimer
+    interval: 50
+    repeat: true
+    onTriggered: testRoot.advance()
+  }
+}

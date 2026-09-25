@@ -190,12 +190,8 @@ Panel {
     var folder = safePath(current.folder)
     if (folder === "" || pickerProc.running) { pickerImages = []; return }
     pickerProc.command = ["bash", "-c",
-      "timeout --kill-after=1s 15s find -P " + Util.shellQuote(folder) +
-      " -xdev" + (current.recursive ? " -maxdepth 32" : " -maxdepth 1") +
-      " -type f \\( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif'" +
-      " -o -iname '*.mp4' -o -iname '*.webm' -o -iname '*.mkv' -o -iname '*.mov' -o -iname '*.avi'" +
-      " -o -iname '*.bmp' -o -iname '*.webp' \\) -print0 2>/dev/null | LC_ALL=C grep -zav '[[:cntrl:]]'" +
-      " | LC_ALL=C.UTF-8 grep -zavP '[\\x{80}-\\x{9f}]' | tr '\\0' '\\n' | head -n 10000 | sort -u"]
+      "test -d \"$1\" || exit 0; exec timeout --kill-after=1s 15s find -P \"$1\" -xdev $2 -type f \\\( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif' -o -iname '*.mp4' -o -iname '*.webm' -o -iname '*.mkv' -o -iname '*.mov' -o -iname '*.avi' -o -iname '*.bmp' -o -iname '*.webp' \\\) -print0 2>/dev/null | LC_ALL=C grep -zav '[[:cntrl:]]' | LC_ALL=C.UTF-8 grep -zavP '[\\x{80}-\\x{9f}]' | tr '\\0' '\\n' | head -n 10000 | sort -u",
+      "wpm-picker", folder, current.recursive ? "-maxdepth 32" : "-maxdepth 1"]
     pickerProc.running = true
   }
 
@@ -203,10 +199,7 @@ Panel {
   // corrupt the newline-delimited result returned by find.
   function safePath(path) {
     var value = String(path || "").trim()
-    var homePath = Quickshell.env("HOME")
-    if (value === "~") value = homePath
-    else if (value.indexOf("~/") === 0) value = homePath + value.substring(1)
-    if (value.length > 4096 || /[\u0000-\u001f\u007f-\u009f]/.test(value)) return ""
+    if (value.length > 4096 || !value.startsWith("/") || /^[a-z][a-z0-9+.-]*:/i.test(value) || /[\u0000-\u001f\u007f-\u009f]/.test(value)) return ""
     return value
   }
 
@@ -489,12 +482,21 @@ Panel {
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
 
-  // The bar is instantiated once per screen, so on a multi-monitor setup this
-  // registers twice and Quickshell logs "another handler is registered for
-  // target wallpapermanager". First one wins, the panel still opens, and the
-  // stock omarchy.power / omarchy.dropbox widgets emit the same warning — it
-  // is the house pattern, not a fault here.
+  function isPrimaryIpcScreen(screenName, screens) {
+    if (!screenName || !screens || screens.length === 0) return false
+    return String(screenName) === String(screens[0].name || "")
+  }
+
+  function ownsIpcTarget() {
+    var window = root.QsWindow ? root.QsWindow.window : null
+    var screen = window ? window.screen : null
+    return isPrimaryIpcScreen(screen ? screen.name : "", Quickshell.screens)
+  }
+
+  // The bar is instantiated once per screen. Its own summon/hide routing selects
+  // the focused screen, while this legacy IPC target is registered only once.
   IpcHandler {
+    enabled: root.ownsIpcTarget()
     target: root.ipcTarget
     function open(): void { root.open() }
     function close(): void { root.close() }
@@ -669,6 +671,8 @@ Panel {
                 anchors.fill: parent
                 sourcePath: entry.modelData.path
                 fillModeName: "zoom"
+                loadMedia: preview.visible
+                playing: false
               }
             }
 
@@ -922,6 +926,8 @@ Panel {
                   anchors.margins: Style.space(3)
                   sourcePath: modelData
                   fillModeName: "zoom"
+                  loadMedia: root.opened && root.tab === "displays" && root.current.mode === "single"
+                  playing: false
                   clip: true
 
                   Rectangle {
