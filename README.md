@@ -92,6 +92,14 @@ Click the wallpaper icon in the bar. Two tabs: **Displays** and
 
 **Displays** — per display, or shared by all of them:
 
+**Use active theme folder**, below the folder field, selects
+`~/.local/state/omarchy/current/theme/backgrounds` without opening Browse.
+It applies to the selected display (or the shared configuration), clears a pin
+from the previous folder, preserves mode/scaling and requests a rescan. It is
+optional: the current folder is unchanged until the button is pressed. The
+stable path points at the active theme; press the button again or Rescan to
+refresh the pool after a theme change.
+
 | Setting | Default | Does |
 | --- | --- | --- |
 | Configure each display separately | on | On: a tab per display. Off: one shared configuration. |
