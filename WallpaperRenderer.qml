@@ -1,5 +1,6 @@
 import QtQuick
 import QtMultimedia
+import Quickshell.Io
 import qs.Commons
 
 // Renders both image wallpapers and video wallpapers through one small API.
@@ -25,8 +26,41 @@ Item {
   signal wallpaperReady()
   signal wallpaperError(string path)
 
-  implicitWidth: renderer.item ? renderer.item.implicitWidth : 0
-  implicitHeight: renderer.item ? renderer.item.implicitHeight : 0
+  // Never infer natural dimensions from a decoder resized to our own width:
+  // Background scales us using implicitWidth/Height, which otherwise forms a loop.
+  property int naturalWidth: 0
+  property int naturalHeight: 0
+  implicitWidth: videoMode && renderer.item ? renderer.item.naturalWidth : naturalWidth
+  implicitHeight: videoMode && renderer.item ? renderer.item.naturalHeight : naturalHeight
+
+  function requestNaturalSize() {
+    if (!root.loadMedia || !root.sourcePath || root.videoMode || sizeProbe.running) return
+    if (root.fillModeName === "zoom" || (root.naturalWidth > 0 && root.naturalHeight > 0)) return
+    sizeProbe.probedPath = root.sourcePath
+    sizeProbe.command = ["timeout", "--kill-after=1s", "3s", "magick", "identify", "-ping", "-format", "%w %h\\n", root.sourcePath]
+    sizeProbe.running = true
+  }
+
+  Process {
+    id: sizeProbe
+    property string probedPath: ""
+    stdout: StdioCollector { id: sizeOutput; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (probedPath === root.sourcePath) {
+        var parts = String(sizeOutput.text || "").trim().split(/\s+/)
+        var w = exitCode === 0 ? parseInt(parts[0], 10) : 0
+        var h = exitCode === 0 ? parseInt(parts[1], 10) : 0
+        root.naturalWidth = w > 0 ? w : 0
+        root.naturalHeight = h > 0 ? h : 0
+      } else {
+        // A path changed during the probe. Ignore old metadata, then probe new.
+        Qt.callLater(root.requestNaturalSize)
+      }
+    }
+  }
+
+  onFillModeNameChanged: Qt.callLater(root.requestNaturalSize)
+  Component.onCompleted: root.requestNaturalSize()
 
   Loader {
     id: renderer
@@ -37,6 +71,9 @@ Item {
 
   onSourcePathChanged: {
     ready = false
+    naturalWidth = 0
+    naturalHeight = 0
+    Qt.callLater(root.requestNaturalSize)
     // Loader bindings can be evaluated before a newly assigned path reaches
     // videoMode. Select the component imperatively so MP4 never passes through
     // the image decoder during a source change.
@@ -47,6 +84,7 @@ Item {
 
   onLoadMediaChanged: {
     ready = false
+    Qt.callLater(root.requestNaturalSize)
     renderer.active = false
     renderer.active = loadMedia && sourcePath !== ""
   }
@@ -71,7 +109,8 @@ Item {
       smooth: true
       playing: root.playing
       onStatusChanged: {
-        if (status === Image.Ready) { root.ready = true; root.wallpaperReady() }
+        root.ready = status === Image.Ready
+        if (root.ready) root.wallpaperReady()
         else if (status === Image.Error && !root.videoMode) root.wallpaperError(root.sourcePath)
       }
     }
@@ -83,6 +122,8 @@ Item {
     Item {
       id: video
       anchors.fill: parent
+      readonly property real naturalWidth: videoOutput.sourceRect.width
+      readonly property real naturalHeight: videoOutput.sourceRect.height
 
       VideoOutput {
         id: videoOutput

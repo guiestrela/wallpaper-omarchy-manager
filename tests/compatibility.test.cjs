@@ -198,6 +198,16 @@ test('active-theme file watcher refreshes the pool and preview accepts middle cl
   assert.ok(background.includes('root.refreshThemeFolder()'));
   assert.ok(widget.includes('objectName: "preview-middle-click"'));
   assert.ok(widget.includes('acceptedButtons: Qt.MiddleButton'));
+  assert.ok(widget.includes('id: previewHideDelay'), 'preview needs time to receive the pointer');
+  assert.ok(widget.includes('previewMouse.containsMouse'), 'preview must remain open under the pointer');
+});
+test('saving unchanged settings is not reported as an API rejection', () => {
+  let calls = 0;
+  const { root, persist } = persistence(() => { calls++; return false; });
+  root.settingsError = 'old error';
+  assert.equal(persist('intervalSec', 0), true);
+  assert.equal(root.settingsError, '');
+  assert.equal(calls, 0);
 });
 test('settings no longer invoke a legacy configuration subprocess', () => {
   assert.doesNotMatch(widget, /"setBarWidget"/);

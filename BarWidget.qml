@@ -366,6 +366,11 @@ Panel {
     for (var name in root.settings) entry[name] = root.settings[name]
     entry.id = root.moduleName
     entry[key] = value
+    // The host returns false for an unchanged entry, not just a rejected write.
+    if (JSON.stringify(entry) === JSON.stringify(root.settings)) {
+      root.settingsError = ""
+      return true
+    }
     try {
       if (!api.updateEntryInline(root.moduleName, entry)) {
         root.settingsError = "Omarchy rejected the wallpaper settings."
@@ -546,14 +551,22 @@ Panel {
     onTriggered: root.previewShown = button.tooltipHovered && !root.opened
   }
 
+  Timer {
+    id: previewHideDelay
+    interval: 250
+    repeat: false
+    onTriggered: root.previewShown = !root.opened && (button.tooltipHovered || previewMouse.containsMouse)
+  }
+
   Connections {
     target: button
     function onTooltipHoveredChanged() {
       if (!button.tooltipHovered) {
         previewDelay.stop()
-        root.previewShown = false
+        previewHideDelay.restart()
         return
       }
+      previewHideDelay.stop()
       // The images go stale as soon as anything shuffles; the reply lands well
       // inside the delay below.
       root.refreshStatus(true)
@@ -568,7 +581,7 @@ Panel {
     readonly property int gap: Style.space(6)
     readonly property string barPosition: root.bar ? root.bar.position : "top"
 
-    visible: root.previewShown && !!anchorWindow
+    visible: root.previewShown && !root.opened && !!anchorWindow
     color: "transparent"
     implicitWidth: Math.ceil(previewCard.implicitWidth)
     implicitHeight: Math.ceil(previewCard.implicitHeight)
@@ -629,9 +642,13 @@ Panel {
       radius: Style.cornerRadius
 
       MouseArea {
+        id: previewMouse
         objectName: "preview-middle-click"
         anchors.fill: parent
         acceptedButtons: Qt.MiddleButton
+        hoverEnabled: true
+        onEntered: previewHideDelay.stop()
+        onExited: previewHideDelay.restart()
         onClicked: root.nextImage()
       }
 

@@ -97,8 +97,9 @@ Click the wallpaper icon in the bar. Two tabs: **Displays** and
 It applies to the selected display (or the shared configuration), clears a pin
 from the previous folder, preserves mode/scaling and requests a rescan. It is
 optional: the current folder is unchanged until the button is pressed. The
-stable path points at the active theme; press the button again or Rescan to
-refresh the pool after a theme change.
+stable path points at the active theme. Theme identity changes now invalidate
+the cached pool automatically, so old filenames and decoder failures are not
+reused for the new theme. The button or Rescan can still refresh it manually.
 
 | Setting | Default | Does |
 | --- | --- | --- |
@@ -178,6 +179,9 @@ Run the focused checks from the project directory:
 ```bash
 node --test tests/compatibility.test.cjs
 python3 tests/test_native_qml.py
+python3 tests/test_renderer_pixels.py
+# Optional: also render every static image in a local folder (read-only):
+# python3 tests/test_renderer_pixels.py --theme-folder /path/to/backgrounds
 omarchy plugin validate .
 ```
 
@@ -185,8 +189,11 @@ The native QML probe requires an accessible Wayland session. It loads the real
 Omarchy UI and API objects with isolated HOME/XDG directories, keeps the popup
 closed and the background service inactive, and does not change wallpaper or
 real settings. Its settings callback is simulated: it checks component loading
-and API integration, directly exercises the OWE suspend/resume handler and
-decodes a generated fixture PNG through the real renderer. It does not test
+and API integration, directly exercises the OWE suspend/resume handler, and
+checks all four scaling modes using a generated PNG and simulated settings writes.
+The offscreen pixel test requires Pillow and checks real captured renderer pixels;
+an optional local folder adds static-image cases without changing the desktop.
+These probes do not test
 desktop presentation, video playback or compositor gestures.
 An expected warning notes that the test deliberately does not connect to
 Hyprland IPC. The JavaScript checks cover persistence and registration contracts;
@@ -199,7 +206,7 @@ the normal Omarchy background transition is preserved.
 
 ## Requirements
 
-Omarchy Quattro · Python 3 · Qt Quick Dialogs for Browse · Qt Multimedia
+Omarchy Quattro · Python 3 · ImageMagick (`magick identify`) for native image dimensions · Qt Quick Dialogs for Browse · Qt Multimedia
 for video playback. Animated GIF playback uses Qt Quick's built-in
 `AnimatedImage` support.
 

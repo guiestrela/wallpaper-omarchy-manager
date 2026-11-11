@@ -61,13 +61,15 @@ Scope {
   Plugin.Background { id: service }
   Plugin.WallpaperRenderer {
     id: renderer
-    width: 32
-    height: 32
+    fillModeName: widget.current.scaling
+    width: service.scaledW(fillModeName, implicitWidth, implicitHeight, 100, 100)
+    height: service.scaledH(fillModeName, implicitWidth, implicitHeight, 100, 100)
     sourcePath: __FIXTURE_PATH__
     playing: false
   }
   Timer {
     property int attempts: 0
+    property int scaleStep: 0
     interval: 200
     running: true
     repeat: true
@@ -76,6 +78,36 @@ Scope {
         if (++attempts < 20) return
         throw new Error("fixture image did not decode")
       }
+      if (scaleStep === 0) {
+        if (!widget.persistDisplay("scaling", "fitHeight")) throw new Error("fitHeight save failed")
+        scaleStep = 1
+        return
+      }
+      if (scaleStep === 1) {
+        if (renderer.implicitWidth !== 8 || renderer.implicitHeight !== 4) {
+          if (++attempts < 20) return
+          console.error("WALLPAPER_SCALE_FAIL: natural image dimensions depend on display size")
+          Qt.quit()
+          return
+        }
+        if (renderer.width !== 200 || renderer.height !== 100) throw new Error("fitHeight geometry")
+        if (!widget.persistDisplay("scaling", "fitWidth")) throw new Error("fitWidth save failed")
+        scaleStep = 2
+        return
+      }
+      if (scaleStep === 2) {
+        if (renderer.width !== 100 || renderer.height !== 50) throw new Error("fitWidth geometry")
+        if (!widget.persistDisplay("scaling", "actual")) throw new Error("actual save failed")
+        scaleStep = 3
+        return
+      }
+      if (scaleStep === 3) {
+        if (renderer.width !== 8 || renderer.height !== 4) throw new Error("actual geometry")
+        if (!widget.persistDisplay("scaling", "zoom")) throw new Error("zoom save failed")
+        scaleStep = 4
+        return
+      }
+      if (renderer.width !== 100 || renderer.height !== 100) throw new Error("zoom geometry")
       if (service.serviceActive) throw new Error("test service must remain inert")
       var handler = null
       for (var i=0; i<service.data.length; i++) {
@@ -89,12 +121,12 @@ Scope {
       if (widget.opened) throw new Error("test must not open a desktop surface")
       if (!widget.persist("intervalSec", 120)) throw new Error("settings rejected")
       if (!widget.persist("shuffleOnWake", true)) throw new Error("second edit rejected")
-      if (widget.settings.intervalSec !== 120 || !widget.settings.shuffleOnWake || probe.writes !== 2)
+      if (widget.settings.intervalSec !== 120 || !widget.settings.shuffleOnWake || probe.writes !== 6)
         throw new Error("consecutive edits lost data")
-      if (!widget.acceptFolderUrl("file:///fixtures/my%20walls") || probe.writes !== 3
+      if (!widget.acceptFolderUrl("file:///fixtures/my%20walls") || probe.writes !== 7
           || widget.settings.displayConfig.all.folder !== "/fixtures/my walls")
         throw new Error("native folder selection did not persist")
-      if (!widget.useActiveThemeFolder() || probe.writes !== 4 || probe.rescans !== 1
+      if (!widget.useActiveThemeFolder() || probe.writes !== 8 || probe.rescans !== 1
           || widget.settings.displayConfig.all.folder !== widget.activeThemeFolder
           || widget.settings.displayConfig.all.pinned !== "")
         throw new Error("active theme folder action failed")
@@ -129,8 +161,8 @@ def main():
         def chunk(kind, data):
             return struct.pack('!I', len(data)) + kind + data + struct.pack('!I', zlib.crc32(kind + data))
         image = base / 'fixture.png'
-        image.write_bytes(b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('!2I5B', 8, 8, 8, 2, 0, 0, 0))
-                          + chunk(b'IDAT', zlib.compress((b'\x00' + b'\xff\x00\x00' * 8) * 8)) + chunk(b'IEND', b''))
+        image.write_bytes(b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('!2I5B', 8, 4, 8, 2, 0, 0, 0))
+                          + chunk(b'IDAT', zlib.compress((b'\x00' + b'\xff\x00\x00' * 8) * 4)) + chunk(b'IEND', b''))
         (base / 'shell.qml').write_text(QML.replace('__PLUGIN_URI__', '"plugin"')
                                         .replace('__FIXTURE_PATH__', json.dumps(str(image))))
         env = os.environ.copy()
@@ -161,7 +193,7 @@ def main():
             print(output[-10000:])
             raise SystemExit(result.returncode or 1)
         severe = [line for line in output.splitlines() if any(s in line for s in
-                  ('TypeError:', 'ReferenceError:', 'Cannot assign', 'is not a type', 'is not installed'))]
+                  ('TypeError:', 'ReferenceError:', 'Cannot assign', 'is not a type', 'is not installed', 'Binding loop'))]
         if severe:
             print('\n'.join(severe))
             raise SystemExit('QML runtime errors')

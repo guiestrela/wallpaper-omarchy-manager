@@ -1494,6 +1494,7 @@ Item {
         next: root.nextPicks(),
         shuffling: root.hasShuffling(),
         shuffleOnWake: root.shuffleOnWake,
+        suspended: root.suspended,
         // Whether the lock and idle services were found. Without them the wake
         // shuffle silently never fires, which is otherwise indistinguishable
         // from the setting not working.
