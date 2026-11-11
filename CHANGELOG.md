@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.5.0](https://github.com/guiestrela/wallpaper-omarchy-manager/compare/v1.4.1...v1.5.0) (2026-11-11)
+
+
+### Features
+
+* add active theme folder selection option ([4a7c1d4](https://github.com/guiestrela/wallpaper-omarchy-manager/commit/4a7c1d49e9a8b34be95b8b33f6d9684c62829ae9))
+* update theme handling and add preview click ([3cce16f](https://github.com/guiestrela/wallpaper-omarchy-manager/commit/3cce16fb6020f96b18231394d5cb8f3ff3024afd))
+
+
+### Bug Fixes
+
+* **renderer:** prevent layout loop on image scaling ([1524051](https://github.com/guiestrela/wallpaper-omarchy-manager/commit/1524051d8df06866c87f818470ef4e040508d360))
+
 ## [1.4.1](https://github.com/guiestrela/wallpaper-omarchy-manager/compare/v1.4.0...v1.4.1) (2026-09-14)
 
 
