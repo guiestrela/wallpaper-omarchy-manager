@@ -108,6 +108,7 @@ reused for the new theme. The button or Rescan can still refresh it manually.
 | Search subfolders | on | Scan recursively. |
 | Mode | Shuffle | **Single** pins one image, chosen from a thumbnail grid. |
 | Scaling | Zoom | Zoom, Fit ↕, Fit ↔, or Actual. |
+| Different image per display | on | Off mirrors one image across displays sharing a folder. |
 
 **Shuffling** — global:
 
@@ -115,7 +116,6 @@ reused for the new theme. The button or Rescan can still refresh it manually.
 | --- | --- | --- |
 | Auto-shuffle every | `0` | Seconds. `0` is off. |
 | Shuffle on unlock or wake | off | Unavailable on Omarchy 4.5; saved preference is preserved. |
-| Different image per display | on | Off mirrors one image across displays sharing a folder. |
 
 ### Mixing displays
 

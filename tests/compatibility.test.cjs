@@ -212,3 +212,18 @@ test('saving unchanged settings is not reported as an API rejection', () => {
 test('settings no longer invoke a legacy configuration subprocess', () => {
   assert.doesNotMatch(widget, /"setBarWidget"/);
 });
+test('different-image-per-display toggle is in Displays and keeps its saved key', () => {
+  const label = 'label: "Different image per display"';
+  const labelIndex = widget.indexOf(label);
+  const displaysStart = widget.indexOf('// ═══════════════════════════════════════════════════════ displays');
+  const shufflingStart = widget.indexOf('// ══════════════════════════════════════════════════════ shuffling');
+  assert.notEqual(labelIndex, -1);
+  assert.equal(widget.indexOf(label, labelIndex + label.length), -1, 'there must be only one copy of the control');
+  assert.ok(labelIndex > displaysStart && labelIndex < shufflingStart, 'the control belongs to the Displays tab');
+
+  const toggleStart = widget.lastIndexOf('Toggle {', labelIndex);
+  const toggleEnd = widget.indexOf('\n          }', labelIndex);
+  const toggle = widget.slice(toggleStart, toggleEnd);
+  assert.match(toggle, /visible: !root\.perDisplayConfig/);
+  assert.match(toggle, /onClicked: root\.persist\("perDisplay", !root\.perDisplay\)/);
+});

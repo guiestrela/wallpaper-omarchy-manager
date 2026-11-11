@@ -838,6 +838,28 @@ Panel {
             font.pixelSize: Style.font.caption
           }
 
+          Toggle {
+            // With each display configured separately this has no meaning:
+            // every display already draws from its own folder.
+            visible: !root.perDisplayConfig
+            width: parent.width
+            label: "Different image per display"
+            description: "Off mirrors one image across every display."
+            checked: root.perDisplay
+            foreground: root.fg
+            fontFamily: root.fontFamily
+            onClicked: root.persist("perDisplay", !root.perDisplay)
+          }
+
+          Text {
+            width: parent.width
+            text: "Displays set to Single keep their image and are left alone."
+            color: Qt.darker(root.fg, 1.6)
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.WordWrap
+          }
+
           PanelSectionHeader {
             text: "FOLDER"
             foreground: root.fg
@@ -1054,27 +1076,6 @@ Panel {
             onClicked: root.persist("shuffleOnWake", !root.shuffleOnWake)
           }
 
-          Toggle {
-            // With each display configured separately this has no meaning:
-            // every display already draws from its own folder.
-            visible: !root.perDisplayConfig
-            width: parent.width
-            label: "Different image per display"
-            description: "Off mirrors one image across every display."
-            checked: root.perDisplay
-            foreground: root.fg
-            fontFamily: root.fontFamily
-            onClicked: root.persist("perDisplay", !root.perDisplay)
-          }
-
-          Text {
-            width: parent.width
-            text: "Displays set to Single keep their image and are left alone."
-            color: Qt.darker(root.fg, 1.6)
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-            wrapMode: Text.WordWrap
-          }
         }
 
         // ════════════════════════════════════════════ always visible
