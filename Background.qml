@@ -6,6 +6,7 @@ import QtQuick.Effects
 import QtQuick.Shapes
 import QtMultimedia
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 // Cloned from omarchy.background and extended with folder mode.
@@ -33,6 +34,15 @@ Item {
   // Injected by the shell's service loader (see shell.qml ensureService).
   property var shell: null
   property var manifest: null
+  // OWE temporarily owns the background during native videos/theme intros.
+  property bool suspended: false
+
+  onSuspendedChanged: {
+    if (!suspended && hasServiceContext() && hasFolder()) {
+      syncDisplayedCurrentLink()
+      folderLinkRepairTimer.restart()
+    }
+  }
 
   // Omarchy injects these after Component.onCompleted. Some replacement bars
   // also construct a compatibility copy of this service, but give it a facade
@@ -706,7 +716,7 @@ Item {
     var folder = safePath(poolKeyFolder(key))
     if (folder === "") { drainScans(); return }
     scanProc.command = ["bash", "-c",
-      "test -d \"$1\" || exit 0; exec timeout --kill-after=1s 15s find -P \"$1\" -xdev $2 -type f \\\( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif' -o -iname '*.mp4' -o -iname '*.webm' -o -iname '*.mkv' -o -iname '*.mov' -o -iname '*.avi' -o -iname '*.bmp' -o -iname '*.webp' \\\) -print0 2>/dev/null | LC_ALL=C grep -zav '[[:cntrl:]]' | LC_ALL=C.UTF-8 grep -zavP '[\\x{80}-\\x{9f}]' | tr '\\0' '\\n' | head -n 10000 | sort -u",
+      "test -d \"$1\" || exit 0; exec timeout --kill-after=1s 15s find -P \"$1\" -xdev $2 -type f \\\( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif' -o -iname '*.mp4' -o -iname '*.m4v' -o -iname '*.webm' -o -iname '*.mkv' -o -iname '*.mov' -o -iname '*.avi' -o -iname '*.bmp' -o -iname '*.webp' \\\) -print0 2>/dev/null | LC_ALL=C grep -zav '[[:cntrl:]]' | LC_ALL=C.UTF-8 grep -zavP '[\\x{80}-\\x{9f}]' | tr '\\0' '\\n' | head -n 10000 | sort -u",
       "wpm-scan", folder, poolKeyRecursive(key) ? "-maxdepth 32" : "-maxdepth 1"]
     scanProc.running = true
   }
@@ -1160,11 +1170,11 @@ Item {
   // Tying the shuffle to unlock and screensaver dismissal puts the update where
   // the user is already waiting to resume, and where a new wallpaper is what
   // they expect to see anyway.
-  // These are bindings rather than one-shot lookups: services are created
-  // lazily, and the shell reassigns its whole service map when one lands, so
-  // they re-evaluate as soon as omarchy.lock and omarchy.idle exist.
-  readonly property var lockService: (shell && shell.serviceFor) ? shell.serviceFor("omarchy.lock") : null
-  readonly property var idleService: (shell && shell.serviceFor) ? shell.serviceFor("omarchy.idle") : null
+  // Omarchy 4.5 deliberately isolates lock/idle from ordinary plugins. Do not
+  // bypass that boundary. Preserve saved preferences, but report unavailable
+  // wake sources and disable the corresponding UI until a public event API exists.
+  readonly property var lockService: null
+  readonly property var idleService: null
 
   readonly property bool sessionLocked: lockService ? lockService.locked === true : false
   readonly property bool screensaverShowing: idleService ? Number(idleService.screensaverWindowCount) > 0 : false
@@ -1245,7 +1255,9 @@ Item {
     var nextDisplayed = ({})
     for (var i = 0; i < names.length; i++) {
       var n = names[i]
-      nextIncoming[n] = path
+      // Theme snapshots expire after the transition. Decode the durable target
+      // instead so renderer recreation never depends on a deleted snapshot.
+      nextIncoming[n] = finalPath
       nextDisplayed[n] = displayedMap[n] || ""
       // Theme transitions may explicitly provide a different source frame.
       // Keep the compatibility layer only for that exceptional case; the
@@ -1262,7 +1274,14 @@ Item {
   }
 
   function setBackground(path, instant) {
-    if (hasFolder()) { shuffle(instant); return }
+    if (!hasServiceContext()) return
+    if (hasFolder()) {
+      // Theme intros end with setInstant instead of themeTransition. Keep the
+      // selected folder image and repair its published link without dealing again.
+      syncDisplayedCurrentLink()
+      folderLinkRepairTimer.restart()
+      return
+    }
     applyGlobal("", path, path, instant, false)
   }
 
@@ -1278,8 +1297,8 @@ Item {
   function applyPendingTheme() {
     if (pendingThemeVersion < 0) return
     pendingThemeFallbackTimer.stop()
-    Color.loadColors(pendingColorsRaw)
-    Color.loadShell(pendingShellRaw)
+    Commons.Color.loadColors(pendingColorsRaw)
+    Commons.Color.loadShell(pendingShellRaw)
     Style.scheduleRefresh()
     pendingThemeVersion = -1
     pendingColorsRaw = ""
@@ -1387,7 +1406,7 @@ Item {
     }
   }
 
-  IpcHandler {
+  ShellIpc {
     enabled: root.serviceActive
     target: "background"
 
@@ -1401,6 +1420,10 @@ Item {
 
     function setInstant(path: string): void {
       root.setBackground(path, true)
+    }
+
+    function setSuspended(value: string): void {
+      root.suspended = value === "true"
     }
 
     function transition(fromPath: string, path: string): void {
@@ -1601,7 +1624,7 @@ Item {
       readonly property string scaling: root.configFor(screenKey).scaling
 
       screen: modelData
-      visible: !remapGuard.remapping
+      visible: !remapGuard.remapping && !root.suspended
       anchors { top: true; bottom: true; left: true; right: true }
 
       ScreenMoveRemap {
@@ -1611,7 +1634,7 @@ Item {
       // Zoom covers the screen, so it keeps the transparency it always had.
       // The fitting modes deliberately do not cover it, and the bars they
       // leave should read as part of the theme rather than as a hole.
-      color: panel.scaling === "zoom" ? "transparent" : Color.background
+      color: panel.scaling === "zoom" ? "transparent" : Commons.Color.background
       // Keep render updates enabled. The background layer has been observed to
       // lose its committed buffer while parked with updatesEnabled=false,
       // leaving a black desktop until omarchy-shell is restarted.
@@ -1648,7 +1671,7 @@ Item {
         sourcePath: root.renderPathFor(panel.oldPath)
         onSourcePathChanged: root.updateRendererSource(panel.screenKey, "old", sourcePath)
         fillModeName: panel.scaling
-        playing: visible
+        playing: !root.suspended && visible
         visible: panel.oldPath !== "" && root.revealProgress < 1
       }
 
@@ -1676,7 +1699,7 @@ Item {
           sourcePath: root.renderPathFor(panel.slotAPath)
           onSourcePathChanged: root.updateRendererSource(panel.screenKey, "slotA", sourcePath)
           fillModeName: panel.scaling
-          playing: frameALayer.visible
+          playing: !root.suspended && frameALayer.visible
           onWallpaperReady: panel.reportIncomingReady()
           onWallpaperError: root.noteBadImage(panel.slotAPath)
         }
@@ -1706,7 +1729,7 @@ Item {
           sourcePath: root.renderPathFor(panel.slotBPath)
           onSourcePathChanged: root.updateRendererSource(panel.screenKey, "slotB", sourcePath)
           fillModeName: panel.scaling
-          playing: frameBLayer.visible
+          playing: !root.suspended && frameBLayer.visible
           onWallpaperReady: panel.reportIncomingReady()
           onWallpaperError: root.noteBadImage(panel.slotBPath)
         }

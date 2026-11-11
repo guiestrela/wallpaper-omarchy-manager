@@ -1,16 +1,16 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Dialogs as Dialogs
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 // Bar icon + settings panel for the folder-backed background service.
 //
-// The widget exists mainly so the settings have somewhere to live: shell.json
-// plugin settings can only be persisted through `setBarWidget`, which targets
-// entries in bar.layout.*. Everything here writes through that IPC rather than
-// touching shell.json, so the shell stays the only writer.
+// Persist through the scoped public plugin API. The shell remains the only
+// configuration writer, without a subprocess and stale queued settings.
 //
 // The service reads the same entry back out of the scoped public bar config, so
 // change reaches the wallpaper without a restart.
@@ -76,7 +76,7 @@ Panel {
 
   readonly property var current: configFor(editingKey)
 
-  // Writes the whole displayConfig back, because setBarWidget replaces a key
+  // Writes the whole displayConfig back, because inline settings replace a key
   // rather than merging into it. Seeding from the resolved config also folds
   // any legacy top-level settings into the new shape on the first edit, which
   // is the only migration this needs.
@@ -99,12 +99,12 @@ Panel {
     var dc = copyDisplayConfig()
     if (!dc[editingKey]) dc[editingKey] = configFor(editingKey)
     dc[editingKey][key] = value
-    persist("displayConfig", dc)
+    return persist("displayConfig", dc)
   }
 
   // When switching from per-display settings to one shared setting, preserve
   // the configuration currently shown in the panel instead of falling back to
-  // the empty legacy top-level folder. Queue the displayConfig write first so
+  // the empty legacy top-level folder. Apply the displayConfig write first so
   // the following toggle cannot race it.
   function setPerDisplayConfig(enabled) {
     enabled = enabled === true
@@ -190,7 +190,7 @@ Panel {
     var folder = safePath(current.folder)
     if (folder === "" || pickerProc.running) { pickerImages = []; return }
     pickerProc.command = ["bash", "-c",
-      "test -d \"$1\" || exit 0; exec timeout --kill-after=1s 15s find -P \"$1\" -xdev $2 -type f \\\( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif' -o -iname '*.mp4' -o -iname '*.webm' -o -iname '*.mkv' -o -iname '*.mov' -o -iname '*.avi' -o -iname '*.bmp' -o -iname '*.webp' \\\) -print0 2>/dev/null | LC_ALL=C grep -zav '[[:cntrl:]]' | LC_ALL=C.UTF-8 grep -zavP '[\\x{80}-\\x{9f}]' | tr '\\0' '\\n' | head -n 10000 | sort -u",
+      "test -d \"$1\" || exit 0; exec timeout --kill-after=1s 15s find -P \"$1\" -xdev $2 -type f \\\( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif' -o -iname '*.mp4' -o -iname '*.m4v' -o -iname '*.webm' -o -iname '*.mkv' -o -iname '*.mov' -o -iname '*.avi' -o -iname '*.bmp' -o -iname '*.webp' \\\) -print0 2>/dev/null | LC_ALL=C grep -zav '[[:cntrl:]]' | LC_ALL=C.UTF-8 grep -zavP '[\\x{80}-\\x{9f}]' | tr '\\0' '\\n' | head -n 10000 | sort -u",
       "wpm-picker", folder, current.recursive ? "-maxdepth 32" : "-maxdepth 1"]
     pickerProc.running = true
   }
@@ -233,8 +233,8 @@ Panel {
     return out
   }
 
-  readonly property color fg: bar ? bar.foreground : Color.foreground
-  readonly property string fontFamily: Style.fontFamily
+  readonly property color fg: bar ? bar.foreground : Commons.Color.foreground
+  readonly property string fontFamily: bar && bar.fontFamily ? bar.fontFamily : Style.font.family
 
   property int poolSize: -1
   property var screenPicks: ({})
@@ -323,6 +323,7 @@ Panel {
   }
 
   readonly property string statusLine: {
+    if (settingsError !== "") return settingsError
     if (current.folder === "") return "No folder set — using the default backgrounds."
     if (poolSize < 0) return "Scanning…"
     if (poolSize === 0)
@@ -339,29 +340,31 @@ Panel {
 
   // ------------------------------------------------------------- persistence
 
-  property var _saveQueue: []
+  property string settingsError: ""
 
   function persist(key, value) {
-    _saveQueue = _saveQueue.concat([[key, value]])
-    drainSaves()
-  }
-
-  function drainSaves() {
-    if (saveProc.running || !_saveQueue.length) return
-    var job = _saveQueue[0]
-    _saveQueue = _saveQueue.slice(1)
-    saveProc.command = ["omarchy-shell", "shell", "setBarWidget",
-      root.moduleName, String(job[0]), JSON.stringify(job[1]), "{}"]
-    saveProc.running = true
-  }
-
-  Process {
-    id: saveProc
-    onExited: function(code, status) {
-      if (code !== 0) console.warn("wallpaperOmarchyManager: failed to save setting (exit " + code + ")")
-      root.drainSaves()
-      if (!root._saveQueue.length) refreshTimer.restart()
+    var api = root.bar ? root.bar.shell : null
+    if (!api || typeof api.updateEntryInline !== "function") {
+      root.settingsError = "Cannot save settings: the Omarchy plugin API is unavailable."
+      return false
     }
+    var entry = ({})
+    for (var name in root.settings) entry[name] = root.settings[name]
+    entry.id = root.moduleName
+    entry[key] = value
+    try {
+      if (!api.updateEntryInline(root.moduleName, entry)) {
+        root.settingsError = "Omarchy rejected the wallpaper settings."
+        return false
+      }
+    } catch (error) {
+      root.settingsError = "Could not save wallpaper settings."
+      return false
+    }
+    root.settings = entry
+    root.settingsError = ""
+    refreshTimer.restart()
+    return true
   }
 
   // ------------------------------------------------------------------ status
@@ -411,39 +414,33 @@ Panel {
   // ----------------------------------------------------------------- actions
 
   function browse() {
-    if (browseProc.running) return
-    // Choosing the dialog supersedes anything half-typed in the field.
     root.folderEdited = false
-
-    // Close before launching so zenity can receive focus instead of opening
-    // behind the panel's layer-shell surface.
+    // Release layer-shell focus before opening the native folder dialog.
     root.close()
-    var cmd = ["zenity", "--file-selection", "--directory",
-      "--title=Choose a wallpaper folder"]
-    if (root.current.folder !== "") cmd.push("--filename=" + root.current.folder + "/")
-    browseProc.command = cmd
-    browseProc.running = true
+    folderDialog.currentFolder = Util.fileUrl(root.current.folder || Quickshell.env("HOME"))
+    folderDialog.open()
   }
 
-  Process {
-    id: browseProc
-    onExited: if (!root.opened) root.open()
-    stderr: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var err = String(text || "").trim()
-      if (err !== "") console.warn("wallpaperOmarchyManager: zenity: " + err)
-      }
+  function acceptFolderUrl(url) {
+    var raw = String(url || "")
+    if (!raw.startsWith("file:///")) return false
+    var picked
+    try { picked = safePath(decodeURIComponent(raw.substring(7))) }
+    catch (error) { return false }
+    if (!picked) return false
+    root.folderEdited = false
+    return root.persistDisplay("folder", picked)
+  }
+
+  Dialogs.FolderDialog {
+    id: folderDialog
+    title: "Choose a wallpaper folder"
+    onAccepted: {
+      if (!root.acceptFolderUrl(selectedFolder))
+        root.settingsError = "Could not save the selected local folder."
+      root.open()
     }
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var picked = String(text || "").trim()
-        if (picked === "") return
-        root.folderEdited = false
-        root.persistDisplay("folder", picked)
-      }
-    }
+    onRejected: root.open()
   }
 
   // Quickshell.execDetached with an argv array, NOT Util.execDetached: that
@@ -495,7 +492,7 @@ Panel {
 
   // The bar is instantiated once per screen. Its own summon/hide routing selects
   // the focused screen, while this legacy IPC target is registered only once.
-  IpcHandler {
+  ShellIpc {
     enabled: root.ownsIpcTarget()
     target: root.ipcTarget
     function open(): void { root.open() }
@@ -606,14 +603,14 @@ Panel {
     BorderSurface {
       id: previewCard
 
-      readonly property color text: Color.tooltip.text
-      readonly property color dim: Qt.darker(Color.tooltip.text, 1.5)
+      readonly property color text: Commons.Color.tooltip.text
+      readonly property color dim: Qt.darker(Commons.Color.tooltip.text, 1.5)
 
       implicitWidth: previewColumn.width + contentLeftInset + contentRightInset
       implicitHeight: previewColumn.implicitHeight + contentTopInset + contentBottomInset
       padding: Style.space(10)
-      color: Color.tooltip.background
-      borderSpec: Border.surfaceSpec("tooltip", "border", Color.tooltip.border, 1)
+      color: Commons.Color.tooltip.background
+      borderSpec: Border.surfaceSpec("tooltip", "border", Commons.Color.tooltip.border, 1)
       radius: Style.cornerRadius
 
       Column {
@@ -934,7 +931,7 @@ Panel {
                     anchors.fill: parent
                     color: "transparent"
                     border.width: Style.normalBorderWidth * 2
-                    border.color: Color.accent
+                    border.color: Commons.Color.accent
                     visible: root.current.pinned === modelData
                   }
                 }
@@ -998,7 +995,8 @@ Panel {
           Toggle {
             width: parent.width
             label: "Shuffle on unlock or wake"
-            description: "Change wallpaper on unlock or screensaver exit rather than on a timer."
+            description: "Shuffle on wake is unavailable: Omarchy isolates lock and idle services from plugins."
+            enabled: false
             checked: root.shuffleOnWake
             foreground: root.fg
             fontFamily: root.fontFamily

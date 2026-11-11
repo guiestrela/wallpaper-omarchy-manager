@@ -35,9 +35,10 @@ configuration, and avoids starting hidden videos.
 - **Every image before any repeat** — picks come off a shuffled queue that only
   reshuffles when it empties. Recently displayed images are also kept away from
   the start of a new queue when the folder is large enough.
-- **Shuffle** on a timer, on unlock and screensaver exit, or by hand.
+- **Shuffle** on a timer or by hand. Unlock/screensaver shuffling is unavailable
+  under Omarchy 4.5's third-party service isolation (see Compatibility).
 - **Recursive scan** of `.jpg` `.jpeg` `.png` `.gif` `.bmp` `.webp` `.mp4`
-  `.webm` `.mkv` `.mov` `.avi`; animated media plays as wallpapers
+  `.m4v` `.webm` `.mkv` `.mov` `.avi`; animated media plays as wallpapers
   automatically.
 - **Skips files it can't decode** and re-deals that display.
 - **Bar widget** for all of it. Middle-click the icon for the next image;
@@ -49,7 +50,7 @@ Pinned wallpapers must be inside the configured folder.
 
 ### Animated wallpapers
 
-Place animated `.gif` or video files (`.mp4`, `.webm`, `.mkv`, `.mov`, `.avi`)
+Place animated `.gif` or video files (`.mp4`, `.m4v`, `.webm`, `.mkv`, `.mov`, `.avi`)
 in any configured folder. They are discovered and played automatically in both
 **Shuffle** and **Single** modes, alongside static wallpapers. Videos use Qt
 Multimedia and loop silently. The same scaling options and per-display
@@ -74,7 +75,6 @@ To update an existing installation, run:
 
 ```bash
 omarchy plugin update io.github.guiestrela.wallpaperomarchymanager
-omarchy restart shell
 ```
 
 To remove the plugin, run:
@@ -94,7 +94,7 @@ Click the wallpaper icon in the bar. Two tabs: **Displays** and
 
 | Setting | Default | Does |
 | --- | --- | --- |
-| Configure each display separately | off | On: a tab per display. Off: one shared configuration. |
+| Configure each display separately | on | On: a tab per display. Off: one shared configuration. |
 | Folder | _empty_ | Where images come from. Empty = current theme backgrounds. Paths may use `~`. |
 | Search subfolders | on | Scan recursively. |
 | Mode | Shuffle | **Single** pins one image, chosen from a thumbnail grid. |
@@ -105,7 +105,7 @@ Click the wallpaper icon in the bar. Two tabs: **Displays** and
 | Setting | Default | Does |
 | --- | --- | --- |
 | Auto-shuffle every | `0` | Seconds. `0` is off. |
-| Shuffle on unlock or wake | off | Shuffle on unlock or screensaver exit instead. |
+| Shuffle on unlock or wake | off | Unavailable on Omarchy 4.5; saved preference is preserved. |
 | Different image per display | on | Off mirrors one image across displays sharing a folder. |
 
 ### Mixing displays
@@ -144,18 +144,54 @@ bind = SUPER SHIFT, W, exec, omarchy-shell -q background next
 
 ## Compatibility
 
-The plugin is designed for Omarchy Quattro and uses the shell's scoped public
-plugin APIs. It was validated locally with Omarchy `4.0.3-1`, Quickshell
-`0.3.1`, and Qt `6.11.2`.
+The compatibility update targets the installed Omarchy **4.5.0-3**, Quickshell
+**0.3.2**, and Qt **6.12** APIs. IPC uses Omarchy's `ShellIpc` registration so
+both the shell socket and Quickshell clients can reach the handlers. Settings
+use the capability-scoped `updateEntryInline` API, preserve other entry fields,
+and report rejected writes instead of silently queuing a subprocess. The manifest
+declares `omarchy.background` as its source replacement, allowing the plugin
+manager to disable/restore the native service and route built-in service lookups.
 
-After updating the plugin, restart the shell if the old widget or service is
-still running. In folder mode, changing the theme keeps the selected
+The background supports OWE's `setSuspended` handoff and pauses its media while
+another renderer owns the desktop. Theme intros keep folder selections instead
+of advancing the shuffle queue; incoming theme images use durable paths rather
+than snapshots that Omarchy deletes after the transition.
+
+Omarchy's public API no longer exposes lock and idle services to ordinary
+third-party plugins. **Shuffle on unlock or wake is disabled and labelled as
+unavailable**, rather than silently promising an action that cannot run. Existing
+preferences remain stored; no authentication-service isolation is bypassed.
+Folder browsing now uses Qt Quick's native `FolderDialog`; the external
+`zenity` executable is no longer needed. Local file URLs are decoded before
+persisting the selected path, and remote URLs are rejected.
+
+Run the focused checks from the project directory:
+
+```bash
+node --test tests/compatibility.test.cjs
+python3 tests/test_native_qml.py
+omarchy plugin validate .
+```
+
+The native QML probe requires an accessible Wayland session. It loads the real
+Omarchy UI and API objects with isolated HOME/XDG directories, keeps the popup
+closed and the background service inactive, and does not change wallpaper or
+real settings. Its settings callback is simulated: it checks component loading
+and API integration, directly exercises the OWE suspend/resume handler and
+decodes a generated fixture PNG through the real renderer. It does not test
+desktop presentation, video playback or compositor gestures.
+An expected warning notes that the test deliberately does not connect to
+Hyprland IPC. The JavaScript checks cover persistence and registration contracts;
+they are not a substitute for interactive acceptance before installation.
+
+Normal plugin-manager/local-file changes use Omarchy's plugin reload. A graphical
+session restart is not part of these checks. In folder mode, changing the theme keeps the selected
 wallpaper while applying the new Omarchy colors; with no folder configured,
 the normal Omarchy background transition is preserved.
 
 ## Requirements
 
-Omarchy Quattro · Python 3 · `zenity` for the Browse button · Qt Multimedia
+Omarchy Quattro · Python 3 · Qt Quick Dialogs for Browse · Qt Multimedia
 for video playback. Animated GIF playback uses Qt Quick's built-in
 `AnimatedImage` support.
 

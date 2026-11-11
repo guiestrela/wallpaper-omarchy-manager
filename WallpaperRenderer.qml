@@ -16,7 +16,7 @@ Item {
   property bool loadMedia: true
   function isVideoPath(path) {
     var value = String(path || "").toLowerCase()
-    return [".mp4", ".webm", ".mkv", ".mov", ".avi"].some(function(ext) {
+    return [".mp4", ".m4v", ".webm", ".mkv", ".mov", ".avi"].some(function(ext) {
       return value.slice(-ext.length) === ext
     })
   }

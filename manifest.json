@@ -16,6 +16,9 @@
     "service": "Background.qml",
     "barWidget": "BarWidget.qml"
   },
+  "omarchy": {
+    "clonedFrom": "omarchy.background"
+  },
   "barWidget": {
     "displayName": "Wallpapers",
     "description": "Give each display its own wallpaper folder, shuffle or pin a static or animated wallpaper, and choose how it scales.",
@@ -67,7 +70,7 @@
         "type": "boolean",
         "label": "Shuffle on unlock or wake",
         "defaultValue": false,
-        "description": "Change wallpaper when you return to the session rather than on a timer."
+        "description": "Unavailable under Omarchy 4.5 service isolation. The saved preference is preserved."
       },
       {
         "key": "folder",
