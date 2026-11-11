@@ -182,6 +182,23 @@ test('theme-folder action supports shared settings and does not rescan rejected 
   assert.equal(use(), false);
   assert.equal(root.folderEdited, true);
 });
+test('theme-directory changes invalidate a cached pool only when theme folders are selected', () => {
+  let restarts = 0;
+  const root = { serviceActive: true, home: '/home/test', screenNames: () => ['DP-1', 'DP-2'],
+    configFor: (n) => ({ folder: n === 'DP-1' ? '/home/test/.local/state/omarchy/current/theme/backgrounds' : '/custom' }) };
+  const fn = new Function('root', 'configReload', `${extract(background, 'refreshThemeFolder')};return refreshThemeFolder;`)(root, { restart() { restarts++; } });
+  fn(); assert.equal(restarts, 1);
+  root.configFor = () => ({ folder: '/custom' });
+  fn(); assert.equal(restarts, 1);
+  root.serviceActive = false;
+  fn(); assert.equal(restarts, 1);
+});
+test('active-theme file watcher refreshes the pool and preview accepts middle click', () => {
+  assert.ok(background.includes('id: themeIdentityFile'));
+  assert.ok(background.includes('root.refreshThemeFolder()'));
+  assert.ok(widget.includes('objectName: "preview-middle-click"'));
+  assert.ok(widget.includes('acceptedButtons: Qt.MiddleButton'));
+});
 test('settings no longer invoke a legacy configuration subprocess', () => {
   assert.doesNotMatch(widget, /"setBarWidget"/);
 });

@@ -518,6 +518,7 @@ Panel {
 
   BarIconButton {
     id: button
+    objectName: "wallpaper-bar-button"
     anchors.fill: parent
     bar: root.bar
     text: "󰸉"
@@ -626,6 +627,13 @@ Panel {
       color: Commons.Color.tooltip.background
       borderSpec: Border.surfaceSpec("tooltip", "border", Commons.Color.tooltip.border, 1)
       radius: Style.cornerRadius
+
+      MouseArea {
+        objectName: "preview-middle-click"
+        anchors.fill: parent
+        acceptedButtons: Qt.MiddleButton
+        onClicked: root.nextImage()
+      }
 
       Column {
         id: previewColumn

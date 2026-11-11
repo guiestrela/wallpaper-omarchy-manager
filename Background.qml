@@ -64,6 +64,30 @@ Item {
   readonly property string stateHome: home + "/.local/state"
   readonly property string currentBackgroundDirectory: stateHome + "/omarchy/current"
   readonly property string currentBackgroundLink: stateHome + "/omarchy/current/background"
+  // The folder alias stays unchanged when Omarchy atomically replaces a theme.
+  // Invalidate cached names/decoder failures when the theme identity file changes.
+  function refreshThemeFolder() {
+    if (!root.serviceActive) return
+    var themeFolder = root.home + "/.local/state/omarchy/current/theme/backgrounds"
+    var names = root.screenNames()
+    for (var i = 0; i < names.length; i++) {
+      if (root.configFor(names[i]).folder === themeFolder) {
+        configReload.restart()
+        return
+      }
+    }
+  }
+
+  FileView {
+    id: themeIdentityFile
+    path: root.stateHome + "/omarchy/current/theme.name"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: {
+      themeIdentityFile.reload()
+      root.refreshThemeFolder()
+    }
+  }
   readonly property string pythonPath: "/usr/bin/python3"
   readonly property string linkPublisherPath: decodeURIComponent(
     String(Qt.resolvedUrl("publish-current-background.py")).replace(/^file:\/\//, ""))

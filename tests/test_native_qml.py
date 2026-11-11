@@ -26,6 +26,7 @@ Scope {
   id: probe
   property int writes: 0
   property int rescans: 0
+  property int advances: 0
   Services.PluginShellApi {
     id: api
     pluginId: "io.github.guiestrela.wallpaperomarchymanager"
@@ -52,6 +53,7 @@ Scope {
     id: widget
     // Keep the production theme-folder action, but never contact a live service.
     function rescanNow() { probe.rescans++ }
+    function nextImage() { probe.advances++ }
     bar: facade
     settings: ({ id: "io.github.guiestrela.wallpaperomarchymanager", intervalSec: 0,
       perDisplayConfig: false, displayConfig: { all: { folder: "", mode: "shuffle" } } })
@@ -96,6 +98,13 @@ Scope {
           || widget.settings.displayConfig.all.folder !== widget.activeThemeFolder
           || widget.settings.displayConfig.all.pinned !== "")
         throw new Error("active theme folder action failed")
+      var button = null
+      for (var b=0; b<widget.children.length; b++) {
+        if (widget.children[b].objectName === "wallpaper-bar-button") button = widget.children[b]
+      }
+      if (!button) throw new Error("wallpaper icon missing")
+      button.triggerPress(Qt.MiddleButton)
+      if (probe.advances !== 1 || widget.opened) throw new Error("middle button dispatch failed")
       console.log("WALLPAPER_NATIVE_QML_PASS")
       Qt.quit()
     }
