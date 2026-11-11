@@ -155,6 +155,33 @@ test('native folder selection decodes local URLs and rejects remote URLs', () =>
   assert.equal(fn('file://remote-host/walls'), false);
   assert.equal(saved.length, 1);
 });
+test('theme-folder action updates only the selected output and clears its old pin', () => {
+  const original = { 'DP-1': { folder: '/old', pinned: '/old/a.png', mode: 'single', scaling: 'fitHeight' },
+    'DP-2': { folder: '/other', pinned: '/other/b.png', mode: 'single' } };
+  let saved, rescans = 0;
+  const root = { editingKey: 'DP-1', activeThemeFolder: '/home/test/.local/state/omarchy/current/theme/backgrounds',
+    folderEdited: true, copyDisplayConfig: () => structuredClone(original), configFor: () => ({}),
+    persist(key, value) { saved = value; return true; }, rescanNow() { rescans++; } };
+  const use = new Function('root', `${extract(widget, 'useActiveThemeFolder')};return useActiveThemeFolder;`)(root);
+  assert.equal(use(), true);
+  assert.equal(saved['DP-1'].folder, root.activeThemeFolder);
+  assert.equal(saved['DP-1'].pinned, '');
+  assert.equal(saved['DP-1'].mode, 'single');
+  assert.equal(saved['DP-1'].scaling, 'fitHeight');
+  assert.deepEqual(saved['DP-2'], original['DP-2']);
+  assert.equal(original['DP-1'].folder, '/old');
+  assert.equal(root.folderEdited, false);
+  assert.equal(rescans, 1);
+});
+test('theme-folder action supports shared settings and does not rescan rejected saves', () => {
+  const root = { editingKey: 'all', activeThemeFolder: '/home/test/.local/state/omarchy/current/theme/backgrounds',
+    folderEdited: true, copyDisplayConfig: () => ({}), configFor: () => ({ recursive: true, mode: 'shuffle' }),
+    persist(key, value) { assert.equal(value.all.folder, root.activeThemeFolder); return false; },
+    rescanNow() { throw new Error('rejected save must not rescan'); } };
+  const use = new Function('root', `${extract(widget, 'useActiveThemeFolder')};return useActiveThemeFolder;`)(root);
+  assert.equal(use(), false);
+  assert.equal(root.folderEdited, true);
+});
 test('settings no longer invoke a legacy configuration subprocess', () => {
   assert.doesNotMatch(widget, /"setBarWidget"/);
 });

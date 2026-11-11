@@ -75,6 +75,20 @@ Panel {
   }
 
   readonly property var current: configFor(editingKey)
+  readonly property string activeThemeFolder: Quickshell.env("HOME") + "/.local/state/omarchy/current/theme/backgrounds"
+
+  function useActiveThemeFolder() {
+    var dc = root.copyDisplayConfig()
+    if (!dc[root.editingKey]) dc[root.editingKey] = root.configFor(root.editingKey)
+    dc[root.editingKey].folder = root.activeThemeFolder
+    // A pin from a custom directory does not belong to the newly selected folder.
+    dc[root.editingKey].pinned = ""
+    if (!root.persist("displayConfig", dc)) return false
+    root.folderEdited = false
+    // Also refresh when this same stable theme path was selected before.
+    root.rescanNow()
+    return true
+  }
 
   // Writes the whole displayConfig back, because inline settings replace a key
   // rather than merging into it. Seeding from the resolved config also folds
@@ -842,6 +856,18 @@ Panel {
               anchors.verticalCenter: parent.verticalCenter
               onClicked: root.browse()
             }
+          }
+
+          Button {
+            objectName: "use-active-theme-folder"
+            text: "Use active theme folder"
+            tooltipText: root.activeThemeFolder
+            bordered: true
+            leftAlign: true
+            width: parent.width
+            foreground: root.fg
+            fontFamily: root.fontFamily
+            onClicked: root.useActiveThemeFolder()
           }
 
           Text {

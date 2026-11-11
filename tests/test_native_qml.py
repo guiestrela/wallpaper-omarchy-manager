@@ -25,6 +25,7 @@ import __PLUGIN_URI__ as Plugin
 Scope {
   id: probe
   property int writes: 0
+  property int rescans: 0
   Services.PluginShellApi {
     id: api
     pluginId: "io.github.guiestrela.wallpaperomarchymanager"
@@ -49,6 +50,8 @@ Scope {
   }
   Plugin.BarWidget {
     id: widget
+    // Keep the production theme-folder action, but never contact a live service.
+    function rescanNow() { probe.rescans++ }
     bar: facade
     settings: ({ id: "io.github.guiestrela.wallpaperomarchymanager", intervalSec: 0,
       perDisplayConfig: false, displayConfig: { all: { folder: "", mode: "shuffle" } } })
@@ -89,6 +92,10 @@ Scope {
       if (!widget.acceptFolderUrl("file:///fixtures/my%20walls") || probe.writes !== 3
           || widget.settings.displayConfig.all.folder !== "/fixtures/my walls")
         throw new Error("native folder selection did not persist")
+      if (!widget.useActiveThemeFolder() || probe.writes !== 4 || probe.rescans !== 1
+          || widget.settings.displayConfig.all.folder !== widget.activeThemeFolder
+          || widget.settings.displayConfig.all.pinned !== "")
+        throw new Error("active theme folder action failed")
       console.log("WALLPAPER_NATIVE_QML_PASS")
       Qt.quit()
     }
