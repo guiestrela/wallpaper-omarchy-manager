@@ -72,6 +72,7 @@ Item {
     var names = root.screenNames()
     for (var i = 0; i < names.length; i++) {
       if (root.configFor(names[i]).folder === themeFolder) {
+        root.themeContentVersion += 1
         configReload.restart()
         return
       }
@@ -331,6 +332,12 @@ Item {
   property var slotAMap: ({})
   property var slotBMap: ({})
   property int frontSlot: 0
+  // Stable theme aliases can contain new bytes without changing a path.
+  // Only the incoming slot receives the new decoder generation.
+  property int themeContentVersion: 0
+  property int appliedThemeContentVersion: 0
+  property int slotAGeneration: 0
+  property int slotBGeneration: 0
 
   // Global-mode bookkeeping, kept so the stock symlink/theme paths behave
   // identically to upstream.
@@ -400,6 +407,7 @@ Item {
   property bool currentLinkStateReady: false
   property string stagingPinFolder: ""
   property string stagingPinPath: ""
+  property string stagingPinKey: ""
 
 
   function poolFor(key) { return pools[key] || [] }
@@ -418,7 +426,9 @@ Item {
     return false
   }
 
-  function pinnedStageKey(folder, pinned) {
+  function pinnedStageKey(folder, pinned, generation) {
+    if (folder === home + "/.local/state/omarchy/current/theme/backgrounds")
+      return JSON.stringify([folder, pinned, generation === undefined ? themeContentVersion : generation])
     return JSON.stringify([folder, pinned])
   }
 
@@ -496,7 +506,8 @@ Item {
     var releases = []
     for (var key in stagedPinnedPaths) {
       try {
-        if (referenced[String(JSON.parse(key)[1])] || stagedPinnedPaths[key] === currentLinkSnapshotPath
+        var parts = JSON.parse(key)
+        if ((key === pinnedStageKey(parts[0], parts[1]) && referenced[String(parts[1])]) || stagedPinnedPaths[key] === currentLinkSnapshotPath
             || stagedPinnedPaths[key] === pendingCurrentLinkSnapshotPath
             || stagedPinnedPaths[key] === inFlightCurrentLinkSnapshotPath
             || uncertainCurrentLinkSnapshotPaths.indexOf(stagedPinnedPaths[key]) !== -1
@@ -603,6 +614,7 @@ Item {
       if (stagedPinnedPaths[key] || failedPinnedPaths[key]) continue
       stagingPinFolder = cfg.folder
       stagingPinPath = cfg.pinned
+      stagingPinKey = key
       pinStageProc.command = [pythonPath, pinStagerPath, cfg.folder, cfg.pinned, JSON.stringify(activeStagedSnapshots())]
       pinStageProc.running = true
       return false
@@ -619,7 +631,7 @@ Item {
     if (!readlinkProc.running) readlinkProc.running = true
   }
 
-  function renderPathFor(logicalPath) {
+  function renderPathFor(logicalPath, generation) {
     var path = String(logicalPath || "")
     if (!path) return ""
     var names = screenNames()
@@ -628,20 +640,25 @@ Item {
       var cfg = configFor(names[i])
       if (cfg.pinned === path && cfg.folder !== "") {
         configuredPin = true
-        var staged = stagedPinnedPaths[pinnedStageKey(cfg.folder, path)]
+        var staged = stagedPinnedPaths[pinnedStageKey(cfg.folder, path, generation)]
         if (staged) return staged
       }
     }
     // Keep a prior snapshot available while a changed pin transitions out.
     for (var key in stagedPinnedPaths) {
-      try { if (JSON.parse(key)[1] === path) return stagedPinnedPaths[key] } catch (e) {}
+      try {
+        var parts = JSON.parse(key)
+        if (parts[1] === path && (generation === undefined || parts.length < 3 || parts[2] === generation))
+          return stagedPinnedPaths[key]
+      } catch (e) {}
     }
     if (configuredPin) return ""
     return path
   }
 
   function finishPinnedStage(exitCode, output) {
-    var key = pinnedStageKey(stagingPinFolder, stagingPinPath)
+    // Preserve the request generation if a theme changed during staging.
+    var key = stagingPinKey || pinnedStageKey(stagingPinFolder, stagingPinPath)
     var result = ({})
     try { result = JSON.parse(String(output || "").trim()) } catch (e) {}
     if (!result || typeof result !== "object") result = ({})
@@ -654,6 +671,7 @@ Item {
       }
       stagingPinFolder = ""
       stagingPinPath = ""
+      stagingPinKey = ""
       return
     }
     var next = ({})
@@ -678,6 +696,7 @@ Item {
     }
     stagingPinFolder = ""
     stagingPinPath = ""
+    stagingPinKey = ""
     Qt.callLater(function() { root.shuffle(false) })
   }
 
@@ -953,6 +972,10 @@ Item {
     for (var i = 0; i < names.length; i++) {
       var name = names[i]
       var cfg = configFor(name)
+      if (cfg.folder === "") {
+        picks[name] = currentBackground || incomingMap[name] || displayedMap[name] || ""
+        continue
+      }
       if (cfg.mode === "single") {
         // `configFor` only proves lexical containment. A pin must also be an
         // exact regular-file result from the current non-following scan.
@@ -1129,7 +1152,23 @@ Item {
   // omarchy-theme-set rewrites the current-background symlink after the theme
   // transition IPC returns. In folder mode that image is not ours, so repair
   // the link from the wallpaper currently shown by the primary display.
-  function syncDisplayedCurrentLink() {
+  function syncDisplayedCurrentLink(defaultPath, instant) {
+    // Native theme handoffs still own empty-folder outputs in a mixed setup.
+    // Keep custom selections and queues untouched while updating those outputs.
+    if (defaultPath) {
+      currentBackground = String(defaultPath).trim()
+      var names = screenNames()
+      var picks = ({})
+      var hasDefault = false
+      for (var i = 0; i < names.length; i++) {
+        var name = names[i]
+        if (configFor(name).folder === "") {
+          picks[name] = currentBackground
+          hasDefault = true
+        } else picks[name] = incomingMap[name] || displayedMap[name] || ""
+      }
+      if (hasDefault) applyPerScreen(picks, instant === true)
+    }
     var primary = primaryScreenName()
     if (!primary) return
     var path = String(displayedMap[primary] || incomingMap[primary] || "")
@@ -1231,6 +1270,7 @@ Item {
     revealArmTimeout.stop()
 
     if (instant) {
+      slotAGeneration = themeContentVersion
       displayedMap = nextIncoming
       incomingMap = ({})
       oldMap = ({})
@@ -1245,23 +1285,33 @@ Item {
     displayedMap = nextDisplayed
     oldMap = nextOld
     incomingMap = nextIncoming
-    if (frontSlot === 0) slotBMap = nextIncoming
-    else slotAMap = nextIncoming
+    if (frontSlot === 0) {
+      slotBGeneration = themeContentVersion
+      slotBMap = nextIncoming
+    } else {
+      slotAGeneration = themeContentVersion
+      slotAMap = nextIncoming
+    }
     revealProgress = 0
     revealArmTimeout.restart()
   }
 
   function applyPerScreen(picks, instant) {
     var names = screenNames()
+    // Recovery and pin failures can supply partial picks. Every promoted slot
+    // must still contain the healthy outputs before the previous slot is freed.
+    var complete = ({})
     var changed = false
     for (var i = 0; i < names.length; i++) {
       var n = names[i]
-      if (picks[n] !== displayedMap[n]) changed = true
+      complete[n] = picks[n] || incomingMap[n] || displayedMap[n] || ""
+      if (complete[n] !== displayedMap[n]) changed = true
     }
-    if (!changed && !instant) return
+    if (!changed && !instant && appliedThemeContentVersion === themeContentVersion) return
+    appliedThemeContentVersion = themeContentVersion
     // The active renderer already contains the old wallpaper. A separate old
     // layer here would decode and upload the same image a second time.
-    beginTransition(displayedMap, picks, ({}), instant === true || displayedIsEmpty())
+    beginTransition(displayedMap, complete, ({}), instant === true || displayedIsEmpty())
   }
 
   // Stock single-image path: fill every screen with the same value.
@@ -1270,10 +1320,19 @@ Item {
     path = String(path || "").trim()
     finalPath = String(finalPath || path).trim()
     fromPath = String(fromPath || "").trim()
-    if (!path || (!force && finalPath === currentBackground)) return
+    if (!path) return
+    var names = screenNames()
+    if (!force && finalPath === currentBackground) {
+      // Compare the pending map while revealing, otherwise the displayed map.
+      // A stable path alone says nothing about newly attached outputs.
+      var covered = Object.keys(incomingMap).length ? incomingMap : displayedMap
+      var complete = Object.keys(covered).length === names.length
+      for (var c = 0; c < names.length; c++)
+        if (covered[names[c]] !== finalPath) complete = false
+      if (complete) return
+    }
     currentBackground = finalPath
 
-    var names = screenNames()
     var nextIncoming = ({})
     var nextOld = ({})
     var nextDisplayed = ({})
@@ -1302,7 +1361,7 @@ Item {
     if (hasFolder()) {
       // Theme intros end with setInstant instead of themeTransition. Keep the
       // selected folder image and repair its published link without dealing again.
-      syncDisplayedCurrentLink()
+      syncDisplayedCurrentLink(path, instant)
       folderLinkRepairTimer.restart()
       return
     }
@@ -1339,7 +1398,7 @@ Item {
       applyPendingTheme()
       // The theme script updates the symlink immediately after this handler
       // returns; the delayed repair runs after that write has completed.
-      syncDisplayedCurrentLink()
+      syncDisplayedCurrentLink(finalPath || path, false)
       folderLinkRepairTimer.restart()
       return
     }
@@ -1424,8 +1483,35 @@ Item {
         var linkedPath = String(text || "").trim()
         if (root.isStagedSnapshotPath(linkedPath)) root.currentLinkSnapshotPath = linkedPath
         root.currentLinkStateReady = true
-        if (root.hasFolder()) { root.shuffle(false); return }
+        if (root.hasFolder()) {
+          // The shared link may already be our custom primary's publication.
+          if (!root.currentBackground && !nativeDefaultProc.running) nativeDefaultProc.running = true
+          root.shuffle(false)
+          return
+        }
         root.applyGlobal("", linkedPath, linkedPath, false, false)
+      }
+    }
+  }
+
+  function nativeDefaultCommand() {
+    // Match native user/theme sources, not the manager-owned publication link.
+    return ["bash", "-c",
+      "theme=$(cat -- \"$1/.local/state/omarchy/current/theme.name\" 2>/dev/null); case \"$theme\" in ''|*/*|.|..) user='' ;; *) user=\"$1/.config/omarchy/backgrounds/$theme\" ;; esac; timeout --kill-after=1s 3s find -H \"$user\" \"$1/.local/state/omarchy/current/theme/backgrounds\" -maxdepth 1 -type f \\( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif' -o -iname '*.bmp' -o -iname '*.webp' -o -iname '*.mp4' -o -iname '*.m4v' -o -iname '*.mov' -o -iname '*.webm' -o -iname '*.mkv' -o -iname '*.avi' \\) -print0 2>/dev/null | LC_ALL=C sort -z | LC_ALL=C grep -zav '[[:cntrl:]]' | LC_ALL=C.UTF-8 grep -zavP '[\\x{80}-\\x{9f}]' | tr '\\0' '\\n' | head -n 1",
+      "wpm-native-default", home]
+  }
+
+  Process {
+    id: nativeDefaultProc
+    command: root.nativeDefaultCommand()
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var nativePath = String(text || "").trim()
+        // An IPC handoff received during discovery is newer than this result.
+        if (!root.serviceActive || root.currentBackground || !nativePath) return
+        root.currentBackground = nativePath
+        root.shuffle(false)
       }
     }
   }
@@ -1721,9 +1807,11 @@ Item {
           anchors.centerIn: parent
           width: root.scaledW(panel.scaling, implicitWidth, implicitHeight, parent.width, parent.height)
           height: root.scaledH(panel.scaling, implicitWidth, implicitHeight, parent.width, parent.height)
-          sourcePath: root.renderPathFor(panel.slotAPath)
+          sourcePath: root.renderPathFor(panel.slotAPath, root.slotAGeneration)
+          sourceGeneration: root.slotAGeneration
           onSourcePathChanged: root.updateRendererSource(panel.screenKey, "slotA", sourcePath)
           fillModeName: panel.scaling
+          preparing: !root.suspended && root.frontSlot !== 0 && panel.incPath !== "" && !frameA.ready
           playing: !root.suspended && frameALayer.visible
           onWallpaperReady: panel.reportIncomingReady()
           onWallpaperError: root.noteBadImage(panel.slotAPath)
@@ -1751,9 +1839,11 @@ Item {
           anchors.centerIn: parent
           width: root.scaledW(panel.scaling, implicitWidth, implicitHeight, parent.width, parent.height)
           height: root.scaledH(panel.scaling, implicitWidth, implicitHeight, parent.width, parent.height)
-          sourcePath: root.renderPathFor(panel.slotBPath)
+          sourcePath: root.renderPathFor(panel.slotBPath, root.slotBGeneration)
+          sourceGeneration: root.slotBGeneration
           onSourcePathChanged: root.updateRendererSource(panel.screenKey, "slotB", sourcePath)
           fillModeName: panel.scaling
+          preparing: !root.suspended && root.frontSlot !== 1 && panel.incPath !== "" && !frameB.ready
           playing: !root.suspended && frameBLayer.visible
           onWallpaperReady: panel.reportIncomingReady()
           onWallpaperError: root.noteBadImage(panel.slotBPath)

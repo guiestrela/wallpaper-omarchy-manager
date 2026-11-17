@@ -32,6 +32,8 @@ function scan(folder) {
 function makeContext(folder, pinned, files) {
   const key = JSON.stringify([folder, true]);
   const context = vm.createContext({
+    home: '/home/fixture',
+    themeContentVersion: 0,
     screenNames: () => ['DP-1'],
     displayedMap: {},
     configFor: () => ({ folder, recursive: true, mode: 'single', pinned }),

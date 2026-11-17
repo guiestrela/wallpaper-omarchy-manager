@@ -1,0 +1,65 @@
+import QtQuick
+import QtQuick.Window
+import Quickshell.Io
+import "../.."
+
+Window {
+  id: testRoot
+  visible: true
+  width: 32
+  height: 32
+  property string targetPath: __WPM_TARGET_PATH__
+  property string replacementPath: __WPM_REPLACEMENT_PATH__
+  property string captureDir: __WPM_CAPTURE_DIR__
+  property int phase: 0
+  property int ticks: 0
+  property int readyFrames: 0
+  property bool capturing: false
+  property bool testCompleted: false
+  property int testExitCode: 0
+
+  WallpaperRenderer { id: renderer; anchors.fill: parent; sourcePath: testRoot.targetPath; playing: false }
+
+  function finish(code) {
+    testCompleted = true
+    testExitCode = code
+    Qt.quit()
+  }
+
+  Process {
+    id: replaceSource
+    command: ["cp", "--", testRoot.replacementPath, testRoot.targetPath]
+    onExited: function(code) {
+      if (code !== 0) { testRoot.finish(1); return }
+      renderer.sourceGeneration += 1
+      testRoot.phase = 2
+      testRoot.ticks = 0
+      testRoot.readyFrames = 0
+    }
+  }
+
+  Timer {
+    interval: 100
+    repeat: true
+    running: true
+    onTriggered: {
+      if (++testRoot.ticks > 100) { testRoot.finish(1); return }
+      if (testRoot.capturing || !renderer.ready || testRoot.phase === 1) return
+      // Image.Ready precedes scene-graph polish and texture presentation.
+      if (++testRoot.readyFrames < 3) return
+      testRoot.capturing = true
+      renderer.grabToImage(function(capture) {
+        var first = testRoot.phase === 0
+        if (!capture.saveToFile(testRoot.captureDir + (first ? "/before.png" : "/after.png"))) {
+          testRoot.finish(1)
+          return
+        }
+        if (first) {
+          testRoot.phase = 1
+          replaceSource.running = true
+          testRoot.capturing = false
+        } else testRoot.finish(0)
+      })
+    }
+  }
+}

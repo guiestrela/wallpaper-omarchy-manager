@@ -408,7 +408,14 @@ def stage_pinned_media(folder: str, pinned: str, cache_root: str | None = None,
         cache_path = _cache_root(cache_root)
         cache_fd = _open_directory(cache_path, create=True, private=True)
         fcntl.flock(cache_fd, fcntl.LOCK_EX)
-        cache_key = hashlib.sha256((folder.rstrip("/") + "\0" + relative).encode("utf-8")).hexdigest()
+        # Include the opened source version, not just its logical pathname.
+        # ctime detects same-size rewrites even when mtime is restored. Keeping
+        # the 64-hex directory shape preserves the QML/release/renew contract.
+        source_version = (source_info.st_dev, source_info.st_ino, source_info.st_size,
+                          source_info.st_mtime_ns, source_info.st_ctime_ns)
+        cache_key = hashlib.sha256(
+            (folder.rstrip("/") + "\0" + relative + "\0" + repr(source_version))
+            .encode("utf-8")).hexdigest()
         prune_cache(cache_fd, cache_path, active_paths or [], source_info.st_size, replace_key=cache_key)
         try:
             os.mkdir(cache_key, 0o700, dir_fd=cache_fd)
@@ -457,7 +464,15 @@ def stage_pinned_media(folder: str, pinned: str, cache_root: str | None = None,
             os.fsync(output_fd)
         finally:
             os.close(output_fd)
-        os.rename(temporary_name, final_name, src_dir_fd=pin_dir_fd, dst_dir_fd=pin_dir_fd)
+        if prior_snapshot:
+            # Duplicate staging adds a lease, never replaces published media.
+            existing = os.stat(final_name, dir_fd=pin_dir_fd, follow_symlinks=False)
+            if (not stat.S_ISREG(existing.st_mode) or existing.st_uid != os.getuid()
+                    or existing.st_mode & 0o077):
+                raise PermissionError(errno.EPERM, "published snapshot is not private")
+            os.unlink(temporary_name, dir_fd=pin_dir_fd)
+        else:
+            os.rename(temporary_name, final_name, src_dir_fd=pin_dir_fd, dst_dir_fd=pin_dir_fd)
         temporary_name = ""
         published = True
         staged_path = os.path.join(cache_path, cache_key, final_name)
@@ -468,7 +483,7 @@ def stage_pinned_media(folder: str, pinned: str, cache_root: str | None = None,
                 os.unlink(temporary_name, dir_fd=pin_dir_fd)
             except FileNotFoundError:
                 pass
-        if lease_created and not published and not prior_snapshot and pin_dir_fd >= 0:
+        if lease_created and not published and pin_dir_fd >= 0:
             try:
                 os.unlink(lease_name, dir_fd=pin_dir_fd)
             except FileNotFoundError:

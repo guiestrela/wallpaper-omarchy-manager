@@ -68,6 +68,8 @@ scan_folder() {
 
 echo "Wallpaper plugin security checks"
 
+check "compatibility and reviewed runtime regressions" node --test tests/*.test.cjs
+
 check "service uses scoped barConfig instead of shellConfig" \
   has_text Background.qml 'lookupSettings(shell ? shell.barConfig : null, pluginId)'
 check "service does not access private shellConfig" \
@@ -82,8 +84,8 @@ check "both scanners bound output" \
   test "$(count_matches 'head -n 10000' Background.qml BarWidget.qml | wc -l)" -eq 2
 check "both scanners have a timeout" \
   test "$(count_matches 'timeout --kill-after=1s 15s' Background.qml BarWidget.qml | wc -l)" -eq 2
-check "both scanners filter control-bearing names while NUL-delimited" \
-  test "$(count_matches 'print0.*LC_ALL=C grep -zav' Background.qml BarWidget.qml | wc -l)" -eq 2
+check "custom scanners and native fallback filter control-bearing names while NUL-delimited" \
+  test "$(count_matches 'print0.*LC_ALL=C grep -zav' Background.qml BarWidget.qml | wc -l)" -eq 3
 check "user paths reject ASCII and C1 control characters" \
   test "$(grep -F -n '\u007f-\u009f' Background.qml BarWidget.qml | wc -l)" -eq 2
 check "QML labels render as plain text" \
@@ -184,12 +186,12 @@ check "pinned media descriptor-open race regression" env PYTHONDONTWRITEBYTECODE
 check "pinned QML snapshot handoff regression" node .github/scripts/pinned-staging-wiring-check.mjs
 check "thumbnail renderer lifecycle regression" node .github/scripts/renderer-lifecycle-check.mjs
 check "single QML bar IPC owner" node .github/scripts/bar-widget-duplicate-handler-check.mjs
-if command -v c++ >/dev/null 2>&1 && command -v pkg-config >/dev/null 2>&1 \
-  && pkg-config --exists Qt6Qml Qt6Quick Qt6Gui Qt6Multimedia; then
-  check "Qt runtime renderer lifecycle regression" node .github/scripts/renderer-runtime-lifecycle-check.mjs
-  check "Qt runtime video readiness and transition regression" node .github/scripts/renderer-video-readiness-check.mjs
+if command -v quickshell >/dev/null 2>&1; then
+  check "Quickshell renderer lifecycle regression" node .github/scripts/renderer-runtime-lifecycle-check.mjs
+  check "Quickshell video readiness and transition regression" node .github/scripts/renderer-video-readiness-check.mjs
+  check "Quickshell stable-path generation pixels" node .github/scripts/renderer-content-generation-check.mjs
 else
-  printf '  SKIP  Qt runtime renderer lifecycle and video readiness (Qt6 development packages unavailable)\\n'
+  printf '  SKIP  Native renderer lifecycle, video readiness and generation pixels (Quickshell unavailable)\n'
 fi
 
 if (( failures )); then

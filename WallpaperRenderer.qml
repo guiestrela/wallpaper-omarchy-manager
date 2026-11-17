@@ -10,6 +10,7 @@ Item {
   id: root
 
   property string sourcePath: ""
+  property int sourceGeneration: 0
   property string fillModeName: "zoom"
   property bool ready: false
   property bool playing: true
@@ -66,10 +67,14 @@ Item {
     id: renderer
     anchors.fill: parent
     active: root.loadMedia && root.sourcePath !== ""
-    sourceComponent: root.videoMode ? videoComponent : imageComponent
+    sourceComponent: root.videoMode ? videoComponent
+      : root.sourcePath.toLowerCase().endsWith(".gif") ? animatedComponent : imageComponent
   }
 
-  onSourcePathChanged: {
+  onSourcePathChanged: reloadSource()
+  onSourceGenerationChanged: { reloadSource() }
+
+  function reloadSource() {
     ready = false
     naturalWidth = 0
     naturalHeight = 0
@@ -78,7 +83,8 @@ Item {
     // videoMode. Select the component imperatively so MP4 never passes through
     // the image decoder during a source change.
     renderer.active = false
-    renderer.sourceComponent = isVideoPath(sourcePath) ? videoComponent : imageComponent
+    renderer.sourceComponent = isVideoPath(sourcePath) ? videoComponent
+      : sourcePath.toLowerCase().endsWith(".gif") ? animatedComponent : imageComponent
     renderer.active = loadMedia && sourcePath !== ""
   }
 
@@ -91,6 +97,27 @@ Item {
 
   Component {
     id: imageComponent
+
+    // Static images must use Image: AnimatedImage has a filename-keyed shared
+    // movie-frame cache that can return old pixels after same-path replacement.
+    Image {
+      anchors.fill: parent
+      source: root.videoMode ? "" : Util.fileUrl(root.sourcePath)
+      sourceSize: Qt.size(Math.max(1, Math.ceil(Math.min(width, root.width))), 0)
+      fillMode: root.fillModeName === "zoom" ? Image.PreserveAspectCrop : Image.Stretch
+      asynchronous: true
+      cache: false
+      smooth: true
+      onStatusChanged: {
+        root.ready = status === Image.Ready
+        if (root.ready) root.wallpaperReady()
+        else if (status === Image.Error && !root.videoMode) root.wallpaperError(root.sourcePath)
+      }
+    }
+  }
+
+  Component {
+    id: animatedComponent
 
     AnimatedImage {
       anchors.fill: parent

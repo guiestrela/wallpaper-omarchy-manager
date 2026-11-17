@@ -36,11 +36,19 @@ Window {
     return renderers.every(predicate)
   }
 
+  function hasMediaItem(item) {
+    for (var i = 0; i < item.children.length; i++) {
+      var child = item.children[i]
+      if ("item" in child && child.item !== null) return true
+    }
+    return false
+  }
+
   function advance() {
     ticks++
 
     if (phase === 0) {
-      if (!all(function(item) { return !item.ready && item.implicitWidth === 0 })) {
+      if (!all(function(item) { return !item.ready && !hasMediaItem(item) })) {
         fail("inactive renderers allocated items")
         return
       }
@@ -51,8 +59,8 @@ Window {
     }
 
     if (phase === 1) {
-      if (renderers.slice(0, 3).every(function(item) { return item.ready && item.implicitWidth > 0 })) {
-        if (renderers.slice(3).some(function(item) { return item.ready || item.implicitWidth > 0 })) {
+      if (renderers.slice(0, 3).every(function(item) { return item.ready && hasMediaItem(item) })) {
+        if (renderers.slice(3).some(function(item) { return item.ready || hasMediaItem(item) })) {
           fail("inactive renderers were allocated")
           return
         }
@@ -61,7 +69,7 @@ Window {
         ticks = 0
         return
       }
-    } else if (phase === 2 && all(function(item) { return !item.ready && item.implicitWidth === 0 })) {
+    } else if (phase === 2 && all(function(item) { return !item.ready && !hasMediaItem(item) })) {
       cycle++
       if (cycle === 5) {
         testRoot.testCompleted = true

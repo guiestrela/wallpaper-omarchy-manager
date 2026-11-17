@@ -1,0 +1,3 @@
+# Generated Python bytecode is not part of the plugin source.
+__pycache__/
+*.py[cod]
