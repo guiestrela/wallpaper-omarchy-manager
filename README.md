@@ -177,13 +177,25 @@ persisting the selected path, and remote URLs are rejected.
 Run the focused checks from the project directory:
 
 ```bash
-node --test tests/compatibility.test.cjs
+node --test tests/*.test.cjs
+bash .github/scripts/security-check.sh
+node .github/scripts/background-check.mjs
 python3 tests/test_native_qml.py
 python3 tests/test_renderer_pixels.py
 # Optional: also render every static image in a local folder (read-only):
 # python3 tests/test_renderer_pixels.py --theme-folder /path/to/backgrounds
 omarchy plugin validate .
 ```
+
+The security runner always executes the filesystem and source-contract checks.
+When Quickshell is available, it also exercises renderer allocation, stable-path
+static-image refresh pixels and hidden video readiness with a native Quickshell host, isolated HOME/XDG directories,
+offscreen software rendering and generated media. Video cases additionally need
+`ffmpeg`; unavailable native/video dependencies are reported as skips, not
+desktop acceptance. The renderer fixtures stub only the Commons path utility;
+they use the real Quickshell process types and Qt media decoders. They validate
+explicit assertion results as well as process exit codes. They no longer need
+Qt development packages or a standalone C++ runner.
 
 The native QML probe requires an accessible Wayland session. It loads the real
 Omarchy UI and API objects with isolated HOME/XDG directories, keeps the popup
@@ -193,8 +205,9 @@ and API integration, directly exercises the OWE suspend/resume handler, and
 checks all four scaling modes using a generated PNG and simulated settings writes.
 The offscreen pixel test requires Pillow and checks real captured renderer pixels;
 an optional local folder adds static-image cases without changing the desktop.
-These probes do not test
-desktop presentation, video playback or compositor gestures.
+The widget-load and static-pixel probes do not test desktop presentation or
+video playback. The separate native video fixtures cover generated-media
+readiness and transitions, not live compositor presentation or gestures.
 An expected warning notes that the test deliberately does not connect to
 Hyprland IPC. The JavaScript checks cover persistence and registration contracts;
 they are not a substitute for interactive acceptance before installation.

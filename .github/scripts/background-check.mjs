@@ -11,6 +11,7 @@ const functions = [
   'openSelector', 'openThemeSwitcher',
 ];
 const sourceTrackingFunctions = [
+  'pinnedStageKey',
   'pinnedLogicalReferences', 'rendererUsesSnapshot', 'updateRendererSource',
   'samePathMap', 'pruneStagedPinnedPaths',
 ];
@@ -69,6 +70,8 @@ const pinMapKey = JSON.stringify([pinFolder, pinLogicalPath]);
 const rendererKey = JSON.stringify(['DP-1', 'slotA']);
 const snapshotPath = '/cache/pinned-snapshot.jpg';
 const sourceTracking = service({ barConfig: {} }, { id: 'wallpaper' }, {
+  home: '/home/fixture',
+  themeContentVersion: 0,
   serviceActive: true,
   displayedMap: ({}), incomingMap: ({}), oldMap: ({}),
   slotAMap: ({ 'DP-1': pinLogicalPath }), slotBMap: ({}),
@@ -87,7 +90,7 @@ assert.equal(sourceTracking.stagedPinnedPaths, stagedMapBeforeNoopPrune,
   'a no-op renderer-source prune must preserve stagedPinnedPaths identity');
 
 // The lifecycle guard also controls declarative side effects, not only JS.
-assert.match(source, /IpcHandler\s*\{\s*enabled: root\.serviceActive\s*target: "background"/);
+assert.match(source, /ShellIpc\s*\{\s*enabled: root\.serviceActive\s*target: "background"/);
 assert.match(source, /Variants\s*\{\s*model: root\.serviceActive \? Quickshell\.screens : \[\]/);
 assert.match(source, /running: root\.serviceActive && !root\.folderMode/);
 assert.match(source, /running: root\.serviceActive && root\.folderMode && root\.intervalSec > 0/);

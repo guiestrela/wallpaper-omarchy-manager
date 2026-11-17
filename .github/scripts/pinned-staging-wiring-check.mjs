@@ -81,6 +81,8 @@ function context() {
     stagingCacheRoot: '/home/user/.cache/omarchy/wallpaperomarchymanager/pinned',
     stagingPinFolder: '/pool',
     stagingPinPath: '/pool/a.jpg',
+    stagingPinKey: '',
+    themeContentVersion: 0,
     pythonPath: '/usr/bin/python3',
     pinnedPoolFresh: true,
     hasServiceContext: () => true,

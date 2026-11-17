@@ -47,6 +47,79 @@ class PinnedMediaStagingTests(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(staged.parent.stat().st_mode), 0o700)
         self.assertEqual(stat.S_IMODE(staged.stat().st_mode), 0o600)
 
+    def test_changed_source_preserves_live_snapshot_generation(self) -> None:
+        for report_active_path in (True, False):
+            with self.subTest(report_active_path=report_active_path):
+                pinned = self.root / f"generation-{report_active_path}.jpg"
+                pinned.write_bytes(b"version-one")
+                source_time = pinned.stat().st_mtime_ns
+                first, first_token = MODULE.stage_pinned_media(
+                    str(self.root), str(pinned), str(self.cache), return_lease=True)
+                first_path = Path(first)
+                first_inode = first_path.stat().st_ino
+                active_paths = [first] if report_active_path else []
+                pinned.write_bytes(b"version-two")
+                # Equal size and restored mtime must not hide a source change.
+                os.utime(pinned, ns=(source_time, source_time))
+                second, second_token = MODULE.stage_pinned_media(
+                    str(self.root), str(pinned), str(self.cache),
+                    active_paths=active_paths, return_lease=True)
+                self.assertNotEqual(first, second, "changed source needs a new generation path")
+                self.assertEqual(first_path.read_bytes(), b"version-one")
+                self.assertEqual(first_path.stat().st_ino, first_inode)
+                self.assertEqual(Path(second).read_bytes(), b"version-two")
+                self.assertRegex(Path(second).parent.name, r"^[a-f0-9]{64}$")
+                second_inode = Path(second).stat().st_ino
+                duplicate, duplicate_token = MODULE.stage_pinned_media(
+                    str(self.root), str(pinned), str(self.cache), return_lease=True)
+                self.assertEqual(duplicate, second, "unchanged source reuses its generation")
+                self.assertEqual(Path(second).stat().st_ino, second_inode,
+                                 "duplicate staging must not replace published media")
+                leases = [{"path": first, "lease": first_token},
+                          {"path": second, "lease": second_token},
+                          {"path": duplicate, "lease": duplicate_token}]
+                self.assertEqual(MODULE.renew_snapshot_leases(str(self.cache), leases), 3)
+                self.assertEqual(MODULE.release_snapshot_leases(str(self.cache), leases), 3)
+
+    def test_failed_restaging_removes_only_unreturned_lease(self) -> None:
+        pinned = self.root / "restage.jpg"
+        pinned.write_bytes(b"existing-snapshot")
+        first, first_token = MODULE.stage_pinned_media(
+            str(self.root), str(pinned), str(self.cache), return_lease=True)
+        second, second_token = MODULE.stage_pinned_media(
+            str(self.root), str(pinned), str(self.cache), return_lease=True)
+        self.assertEqual(first, second)
+        snapshot = Path(first)
+        inode = snapshot.stat().st_ino
+        original_children = {child.name for child in snapshot.parent.iterdir()}
+        self.assertEqual(len(list(snapshot.parent.glob(".lease-*"))), 2)
+        original_read = os.read
+        injected = False
+
+        def fail_copy(fd, count):
+            nonlocal injected
+            if not injected:
+                injected = True
+                return original_read(fd, count)
+            raise OSError(errno.EIO, "injected restaging read failure")
+
+        with patch.object(MODULE.os, "read", side_effect=fail_copy):
+            with self.assertRaises(OSError) as caught:
+                MODULE.stage_pinned_media(
+                    str(self.root), str(pinned), str(self.cache), return_lease=True)
+        self.assertTrue(injected)
+        self.assertEqual(caught.exception.errno, errno.EIO)
+        self.assertEqual({child.name for child in snapshot.parent.iterdir()}, original_children,
+                         "failed restaging must remove its unreturned lease and temporary copy only")
+        self.assertEqual(snapshot.read_bytes(), b"existing-snapshot")
+        self.assertEqual(snapshot.stat().st_ino, inode)
+        leases = [{"path": first, "lease": first_token}, {"path": second, "lease": second_token}]
+        self.assertEqual(MODULE.renew_snapshot_leases(str(self.cache), leases), 2)
+        self.assertEqual(MODULE.release_snapshot_leases(str(self.cache), leases[:1]), 1)
+        self.assertEqual(MODULE.renew_snapshot_leases(str(self.cache), leases[1:]), 1)
+        self.assertEqual(MODULE.release_snapshot_leases(str(self.cache), leases[1:]), 1)
+        self.assertEqual(list(snapshot.parent.glob(".lease-*")), [])
+
     def test_cli_returns_real_snapshot_path_from_separate_arguments(self) -> None:
         pinned = self.root / "cli.jpg"
         pinned.write_bytes(b"cli-fixture")
