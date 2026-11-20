@@ -227,3 +227,172 @@ test('different-image-per-display toggle is in Displays and keeps its saved key'
   assert.match(toggle, /visible: !root\.perDisplayConfig/);
   assert.match(toggle, /onClicked: root\.persist\("perDisplay", !root\.perDisplay\)/);
 });
+
+test('picker records the latest request while an earlier scan is active', () => {
+  const root = {
+    editingKey: 'DP-2',
+    current: { folder: '/fixtures/B', recursive: false },
+    pickerRequestGeneration: 4,
+    queuedPickerRequest: null,
+    activePickerRequest: { generation: 3, display: 'DP-1', folder: '/fixtures/A', recursive: true },
+    pickerResultContext: { generation: 3, display: 'DP-1', folder: '/fixtures/A', recursive: true },
+    pickerImages: ['/fixtures/A/old.png'],
+    pickerProc: { running: true, command: ['scan-A'] },
+    safePath: (value) => String(value || '')
+  };
+  const load = new Function('root', 'current', 'safePath', 'pickerProc', 'pickerImages',
+    `${extract(widget, 'loadPicker')};return loadPicker;`)(
+      root, root.current, root.safePath, root.pickerProc, root.pickerImages);
+
+  load();
+  assert.deepEqual(root.queuedPickerRequest,
+    { generation: 5, display: 'DP-2', folder: '/fixtures/B', recursive: false });
+  assert.equal(root.pickerRequestGeneration, 5);
+  assert.deepEqual(root.pickerImages, []);
+  assert.equal(root.pickerResultContext, null);
+  assert.deepEqual(root.pickerProc.command, ['scan-A'], 'an active process must not be retargeted');
+});
+test('picker starts the latest scan after stale output and rejects stale image clicks', () => {
+  const root = {
+    editingKey: 'DP-1',
+    current: { folder: '/fixtures/A', recursive: true },
+    pickerRequestGeneration: 0,
+    activePickerRequest: null,
+    queuedPickerRequest: null,
+    pickerResultContext: null,
+    pickerImages: [],
+    pickerOutput: '',
+    pickerProc: { running: false, command: [] },
+    safePath: (value) => String(value || ''),
+    saved: [],
+    persistDisplay(key, value) { this.saved.push([key, value]); return true; }
+  };
+  const names = ['loadPicker', 'startPickerRequest', 'pickerRequestIsCurrent',
+    'finishPickerRequest', 'selectPickerImage'];
+  const api = new Function('root', 'pickerProc',
+    `${names.map(name => extract(widget, name)).join(';')};return {${names.join(',')}};`)(root, root.pickerProc);
+  Object.assign(root, api);
+
+  root.loadPicker();
+  const first = root.activePickerRequest;
+  assert.equal(first.folder, '/fixtures/A');
+  assert.equal(root.pickerProc.command[4], '/fixtures/A');
+  assert.equal(root.pickerProc.command[5], '-maxdepth 32');
+
+  root.current = { folder: '/fixtures/B', recursive: false };
+  root.editingKey = 'DP-2';
+  root.loadPicker();
+  const latest = root.queuedPickerRequest;
+  assert.deepEqual(latest, { generation: 2, display: 'DP-2', folder: '/fixtures/B', recursive: false });
+
+  root.pickerProc.running = false;
+  root.finishPickerRequest(first, '/fixtures/A/old.png');
+  assert.equal(root.pickerProc.running, true);
+  assert.equal(root.activePickerRequest.generation, latest.generation);
+  assert.equal(root.pickerProc.command[4], '/fixtures/B');
+  assert.equal(root.pickerProc.command[5], '-maxdepth 1');
+  assert.deepEqual(root.pickerImages, []);
+  assert.equal(root.pickerResultContext, null);
+
+  root.pickerProc.running = false;
+  root.finishPickerRequest(latest, ['/fixtures/B/one.png', '/fixtures/B/two.png'].join(String.fromCharCode(10)));
+  assert.deepEqual(root.pickerImages, ['/fixtures/B/one.png', '/fixtures/B/two.png']);
+  assert.equal(root.pickerResultContext, latest);
+  assert.equal(root.selectPickerImage('/fixtures/A/old.png', first), false);
+  assert.equal(root.selectPickerImage('/fixtures/B/one.png', latest), true);
+  assert.deepEqual(root.saved, [['pinned', '/fixtures/B/one.png']]);
+});
+
+test('picker scan command searches only the requested temporary folder and recursion depth', () => {
+  const { spawnSync } = require('node:child_process');
+  const os = require('node:os');
+  const temporary = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'wpm-picker-'));
+  try {
+    const folderA = path.join(temporary, 'A');
+    const folderB = path.join(temporary, 'B');
+    fs.mkdirSync(path.join(folderA, 'nested'), { recursive: true });
+    fs.mkdirSync(path.join(folderB, 'nested'), { recursive: true });
+    for (const file of ['top.png', 'nested/deep.jpg']) fs.writeFileSync(path.join(folderA, file), 'fixture');
+    for (const file of ['root.png', 'nested/deep.jpg']) fs.writeFileSync(path.join(folderB, file), 'fixture');
+    const root = {
+      editingKey: 'DP-1', current: { folder: folderA, recursive: true },
+      pickerRequestGeneration: 0, activePickerRequest: null, queuedPickerRequest: null,
+      pickerResultContext: null, pickerImages: [], pickerOutput: '',
+      pickerProc: { running: false, command: [] }, safePath: value => String(value || ''),
+      persistDisplay() { return true; }
+    };
+    const names = ['loadPicker', 'startPickerRequest', 'pickerRequestIsCurrent', 'finishPickerRequest'];
+    const api = new Function('root', 'pickerProc',
+      `${names.map(name => extract(widget, name)).join(';')};return {${names.join(',')}};`)(root, root.pickerProc);
+    Object.assign(root, api);
+
+    root.loadPicker();
+    const scanA = spawnSync(root.pickerProc.command[0], root.pickerProc.command.slice(1), { encoding: 'utf8', timeout: 5000 });
+    assert.equal(scanA.status, 0, scanA.stderr);
+    root.pickerProc.running = false;
+    root.finishPickerRequest(root.activePickerRequest, scanA.stdout);
+    assert.deepEqual(root.pickerImages, [path.join(folderA, 'nested/deep.jpg'), path.join(folderA, 'top.png')]);
+
+    root.current = { folder: folderB, recursive: false };
+    root.editingKey = 'DP-2';
+    root.loadPicker();
+    const scanB = spawnSync(root.pickerProc.command[0], root.pickerProc.command.slice(1), { encoding: 'utf8', timeout: 5000 });
+    assert.equal(scanB.status, 0, scanB.stderr);
+    root.pickerProc.running = false;
+    root.finishPickerRequest(root.activePickerRequest, scanB.stdout);
+    assert.deepEqual(root.pickerImages, [path.join(folderB, 'root.png')]);
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
+test('empty picker folder invalidates an in-flight result without starting another scan', () => {
+  const root = {
+    editingKey: 'DP-1', current: { folder: '', recursive: true },
+    pickerRequestGeneration: 2,
+    activePickerRequest: { generation: 2, display: 'DP-1', folder: '/fixtures/A', recursive: true },
+    queuedPickerRequest: { generation: 2, display: 'DP-1', folder: '/fixtures/A', recursive: true },
+    pickerResultContext: { generation: 2, display: 'DP-1', folder: '/fixtures/A', recursive: true },
+    pickerImages: ['/fixtures/A/old.png'], pickerOutput: '',
+    pickerProc: { running: true, command: ['scan-A'] }, safePath: value => String(value || ''),
+  };
+  const load = new Function('root', 'pickerProc', `${extract(widget, 'loadPicker')};return loadPicker;`)(root, root.pickerProc);
+  load();
+  assert.equal(root.pickerRequestGeneration, 3);
+  assert.equal(root.queuedPickerRequest, null);
+  assert.equal(root.pickerResultContext, null);
+  assert.deepEqual(root.pickerImages, []);
+  root.pickerProc.running = false;
+  const names = ['pickerRequestIsCurrent', 'startPickerRequest', 'finishPickerRequest'];
+  const callbacks = new Function('root', 'pickerProc',
+    `${names.map(name => extract(widget, name)).join(';')};return {${names.join(',')}};`)(root, root.pickerProc);
+  Object.assign(root, callbacks);
+  root.finishPickerRequest(root.activePickerRequest, '/fixtures/A/late.png');
+  assert.deepEqual(root.pickerImages, []);
+  assert.equal(root.pickerResultContext, null);
+});
+
+test('shared-mode toggle stops after the display-config write is rejected', () => {
+  const calls = [];
+  const { root, persist } = persistence((id, entry) => {
+    calls.push({ id, entry });
+    return calls.length !== 1;
+  });
+  root.settings.perDisplayConfig = true;
+  const previous = root.settings;
+  const toggle = new Function('root', 'editingKey', 'copyDisplayConfig', 'configFor', 'persist',
+    `${extract(widget, 'setPerDisplayConfig')};return setPerDisplayConfig;`)(
+      root,
+      'DP-1',
+      () => structuredClone(root.settings.displayConfig),
+      (key) => structuredClone(root.settings.displayConfig[key] || { folder: '/fixtures/wallpapers' }),
+      persist);
+
+  toggle(false);
+  assert.equal(calls.length, 1, 'must not persist the mode after the required config write fails');
+  assert.equal(calls[0].entry.displayConfig.all.folder, '/fixtures/wallpapers');
+  assert.equal(calls[0].entry.perDisplayConfig, false);
+  assert.equal(calls[0].entry.custom, 'keep');
+  assert.equal(root.settings, previous);
+  assert.ok(root.settingsError);
+});

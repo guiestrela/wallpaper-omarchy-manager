@@ -345,6 +345,7 @@ Item {
 
   property int backgroundVersion: 0
   property int revealStartedVersion: -1
+  property int revealTimedOutVersion: -1
   property int pendingThemeVersion: -1
   property string pendingColorsRaw: ""
   property string pendingShellRaw: ""
@@ -353,6 +354,7 @@ Item {
   // Screen names whose *incoming* image has decoded, plus the gate that lets
   // every screen's incoming layer become visible at the same moment.
   property var incomingReady: ({})
+  property var incomingFailed: ({})
   property bool revealArmed: false
 
   function imageUrl(path) {
@@ -1055,8 +1057,33 @@ Item {
 
   // ------------------------------------------------------- undecodable images
 
-  function noteBadImage(path) {
+  function noteRendererError(screenName, slot, sourcePath) {
+    screenName = String(screenName || "")
+    sourcePath = String(sourcePath || "")
+    if (!screenName || !sourcePath) return
+    var logicalPath = slot === frontSlot ? displayedMap[screenName] : incomingMap[screenName]
+    if (!logicalPath) return
+    var generation = slot === 0 ? slotAGeneration : slotBGeneration
+    if (renderPathFor(logicalPath, generation) !== sourcePath) return
+    if (slot === frontSlot) noteBadImage(logicalPath)
+    else noteBadImage(logicalPath, screenName, backgroundVersion)
+  }
+
+  function noteBadImage(path, screenName, version) {
     path = String(path || "")
+    if (version !== undefined
+        && (version !== backgroundVersion || !screenName || incomingMap[String(screenName)] !== path)) return
+    if (version !== undefined) {
+      var failed = ({})
+      for (var existing in incomingFailed) failed[existing] = incomingFailed[existing]
+      failed[String(screenName)] = path
+      incomingFailed = failed
+      if (revealStartedVersion === version) {
+        revealAnimation.stop()
+        revealProgress = 0
+        revealArmed = false
+      }
+    }
     if (!path || badImages[path]) return
     var next = ({})
     for (var k in badImages) next[k] = badImages[k]
@@ -1264,7 +1291,9 @@ Item {
   function beginTransition(nextDisplayed, nextIncoming, nextOld, instant) {
     backgroundVersion += 1
     revealStartedVersion = -1
+    revealTimedOutVersion = -1
     incomingReady = ({})
+    incomingFailed = ({})
     revealArmed = false
     revealAnimation.stop()
     revealArmTimeout.stop()
@@ -1412,7 +1441,9 @@ Item {
   // screen instead leaves the slower one hidden for the whole animation (its
   // layer is gated on revealArmed) and popping in at the end — a wipe on one
   // monitor and a hard cut on the other.
-  function noteIncomingReady(name) {
+  function noteIncomingReady(name, version, path) {
+    if (version !== backgroundVersion || !path || path !== incomingMap[name]
+        || incomingFailed[name] === path) return
     if (incomingReady[name]) return
     var next = ({})
     for (var k in incomingReady) next[k] = incomingReady[k]
@@ -1421,16 +1452,25 @@ Item {
     armRevealIfReady()
   }
 
+  function incomingReadyForCurrentTransition(version) {
+    if (version !== backgroundVersion) return false
+    var names = screenNames()
+    if (!names.length) return false
+    for (var i = 0; i < names.length; i++) {
+      var name = names[i]
+      if (!incomingMap[name] || !incomingReady[name] || incomingFailed[name] === incomingMap[name]) return false
+    }
+    return true
+  }
+
   function armRevealIfReady() {
     if (revealStartedVersion === backgroundVersion) return
-    var names = screenNames()
-    if (!names.length) return
-    for (var i = 0; i < names.length; i++) if (!incomingReady[names[i]]) return
-    armReveal()
+    if (incomingReadyForCurrentTransition(backgroundVersion)) armReveal()
   }
 
   function armReveal() {
-    if (revealStartedVersion === backgroundVersion) return
+    if (revealStartedVersion === backgroundVersion
+        || !incomingReadyForCurrentTransition(backgroundVersion)) return
     revealStartedVersion = backgroundVersion
     revealArmTimeout.stop()
     revealArmed = true
@@ -1438,13 +1478,20 @@ Item {
     revealAnimation.restart()
   }
 
-  // A screen whose image fails to decode would otherwise hold the reveal
-  // forever, leaving the old wallpaper up. Arm anyway after a grace period.
+  function handleRevealTimeout(version) {
+    if (version !== backgroundVersion || revealStartedVersion === version) return
+    // Keep the current front slot leased and visible. Late readiness can still
+    // complete this generation; errors replace or abandon it without a blank.
+    revealTimedOutVersion = version
+  }
+
+  // A screen whose image fails to decode leaves its old front slot visible;
+  // timeout is diagnostic only and never promotes an unready global slot.
   Timer {
     id: revealArmTimeout
     interval: 1500
     repeat: false
-    onTriggered: root.armReveal()
+    onTriggered: root.handleRevealTimeout(root.backgroundVersion)
   }
 
   // --------------------------------------------------------------- actions
@@ -1625,6 +1672,10 @@ Item {
     duration: 420
     easing.type: Easing.InOutCubic
     onFinished: {
+      // Completion can be delivered after a newer generation started. Never
+      // promote or release a slot unless this generation was fully decoded.
+      if (root.revealStartedVersion !== root.backgroundVersion
+          || !root.incomingReadyForCurrentTransition(root.backgroundVersion)) return
       var names = root.screenNames()
       var next = ({})
       for (var i = 0; i < names.length; i++) {
@@ -1754,13 +1805,16 @@ Item {
       // Report readiness unconditionally — not gated on revealProgress, which
       // is what previously starved the second monitor of its reveal.
       function reportIncomingReady() {
-        if (!panel.incPath) return
+        var path = panel.incPath
+        var version = root.backgroundVersion
+        if (!path) return
         var frame = root.frontSlot === 0 ? frameB : frameA
         if (!frame.ready) return
         Qt.callLater(function() {
+          if (version !== root.backgroundVersion || panel.incPath !== path) return
           var currentFrame = root.frontSlot === 0 ? frameB : frameA
-          if (!panel.incPath || !currentFrame.ready) return
-          root.noteIncomingReady(panel.screenKey)
+          if (!currentFrame.ready) return
+          root.noteIncomingReady(panel.screenKey, version, path)
         })
       }
 
@@ -1814,7 +1868,7 @@ Item {
           preparing: !root.suspended && root.frontSlot !== 0 && panel.incPath !== "" && !frameA.ready
           playing: !root.suspended && frameALayer.visible
           onWallpaperReady: panel.reportIncomingReady()
-          onWallpaperError: root.noteBadImage(panel.slotAPath)
+          onWallpaperError: function(path) { root.noteRendererError(panel.screenKey, 0, path) }
         }
       }
 
@@ -1846,7 +1900,7 @@ Item {
           preparing: !root.suspended && root.frontSlot !== 1 && panel.incPath !== "" && !frameB.ready
           playing: !root.suspended && frameBLayer.visible
           onWallpaperReady: panel.reportIncomingReady()
-          onWallpaperError: root.noteBadImage(panel.slotBPath)
+          onWallpaperError: function(path) { root.noteRendererError(panel.screenKey, 1, path) }
         }
       }
 
@@ -1881,6 +1935,15 @@ Item {
       Connections {
         target: panel
         function onIncPathChanged() {
+          panel.reportIncomingReady()
+        }
+      }
+
+      // A new transition can reuse an already-decoded path on one display;
+      // report against the new generation even when incPath itself is stable.
+      Connections {
+        target: root
+        function onIncomingMapChanged() {
           panel.reportIncomingReady()
         }
       }
