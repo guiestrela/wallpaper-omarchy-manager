@@ -117,17 +117,17 @@ Panel {
   }
 
   // When switching from per-display settings to one shared setting, preserve
-  // the configuration currently shown in the panel instead of falling back to
-  // the empty legacy top-level folder. Apply the displayConfig write first so
-  // the following toggle cannot race it.
+  // the configuration currently shown in the panel. Submit both keys in one
+  // inline update so a rejected write cannot leave the toggle half-applied.
   function setPerDisplayConfig(enabled) {
     enabled = enabled === true
+    var updates = ({ perDisplayConfig: enabled })
     if (!enabled) {
       var dc = copyDisplayConfig()
       if (!dc.all || typeof dc.all !== "object") dc.all = configFor(editingKey)
-      persist("displayConfig", dc)
+      updates.displayConfig = dc
     }
-    persist("perDisplayConfig", enabled)
+    return persist(updates)
   }
 
   // Clearing a folder must also clear its pin. Otherwise the service still
@@ -196,17 +196,79 @@ Panel {
   // ------------------------------------------------------------- the picker
 
   property var pickerImages: []
+  property int pickerRequestGeneration: 0
+  property var activePickerRequest: null
+  property var queuedPickerRequest: null
+  property var pickerResultContext: null
+  property string pickerOutput: ""
 
   // Listed by the widget rather than taken from the service's pool: the pool
   // holds only what the *service* is configured to use, and the picker has to
   // show the folder being edited, which may be a different display's.
   function loadPicker() {
-    var folder = safePath(current.folder)
-    if (folder === "" || pickerProc.running) { pickerImages = []; return }
-    pickerProc.command = ["bash", "-c",
-      "test -d \"$1\" || exit 0; exec timeout --kill-after=1s 15s find -P \"$1\" -xdev $2 -type f \\\( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif' -o -iname '*.mp4' -o -iname '*.m4v' -o -iname '*.webm' -o -iname '*.mkv' -o -iname '*.mov' -o -iname '*.avi' -o -iname '*.bmp' -o -iname '*.webp' \\\) -print0 2>/dev/null | LC_ALL=C grep -zav '[[:cntrl:]]' | LC_ALL=C.UTF-8 grep -zavP '[\\x{80}-\\x{9f}]' | tr '\\0' '\\n' | head -n 10000 | sort -u",
-      "wpm-picker", folder, current.recursive ? "-maxdepth 32" : "-maxdepth 1"]
+    root.pickerRequestGeneration += 1
+    var folder = root.safePath(root.current.folder)
+    var request = {
+      generation: root.pickerRequestGeneration,
+      display: root.editingKey,
+      folder: folder,
+      recursive: root.current.recursive === true
+    }
+    root.pickerImages = []
+    root.pickerResultContext = null
+    if (folder === "") {
+      root.queuedPickerRequest = null
+      return
+    }
+    root.queuedPickerRequest = request
+    if (!pickerProc.running) root.startPickerRequest(request)
+  }
+
+  function startPickerRequest(request) {
+    if (!request || request.folder === "") return
+    if (pickerProc.running) {
+      root.queuedPickerRequest = request
+      return
+    }
+    root.queuedPickerRequest = null
+    root.activePickerRequest = request
+    root.pickerOutput = ""
+    var scanCommand = 'test -d "$1" || exit 0; exec timeout --kill-after=1s 15s find -P "$1" -xdev $2 -type f \\( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.gif" -o -iname "*.mp4" -o -iname "*.m4v" -o -iname "*.webm" -o -iname "*.mkv" -o -iname "*.mov" -o -iname "*.avi" -o -iname "*.bmp" -o -iname "*.webp" \\) -print0 2>/dev/null | LC_ALL=C grep -zav "[[:cntrl:]]" | LC_ALL=C.UTF-8 grep -zavP "[\\\\x{80}-\\\\x{9f}]" | tr "\\0" "\\n" | head -n 10000 | sort -u'
+    pickerProc.command = ["bash", "-c", scanCommand,
+      "wpm-picker", request.folder, request.recursive ? "-maxdepth 32" : "-maxdepth 1"]
     pickerProc.running = true
+  }
+
+  function pickerRequestIsCurrent(request) {
+    if (!request || request.generation !== root.pickerRequestGeneration) return false
+    var folder = root.safePath(root.current.folder)
+    return folder !== "" && request.display === root.editingKey
+      && request.folder === folder
+      && request.recursive === (root.current.recursive === true)
+  }
+
+  function finishPickerRequest(request, text) {
+    if (root.activePickerRequest && request
+        && root.activePickerRequest.generation === request.generation)
+      root.activePickerRequest = null
+
+    if (root.pickerRequestIsCurrent(request)) {
+      root.pickerImages = String(text || "").split(String.fromCharCode(10)).filter(function(p) { return p !== "" })
+      root.pickerResultContext = request
+    }
+
+    var queued = root.queuedPickerRequest
+    if (queued && root.pickerRequestIsCurrent(queued)) root.startPickerRequest(queued)
+    else root.queuedPickerRequest = null
+  }
+
+  function selectPickerImage(path, request) {
+    path = String(path || "")
+    if (!path || !root.pickerRequestIsCurrent(request)
+        || !root.pickerResultContext
+        || root.pickerResultContext.generation !== request.generation
+        || root.pickerImages.indexOf(path) === -1) return false
+    return root.persistDisplay("pinned", path)
   }
 
   // Keep picker input consistent with the service. Control characters would
@@ -221,9 +283,12 @@ Panel {
     id: pickerProc
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: {
-        root.pickerImages = String(text || "").split("\n").filter(function(p) { return p !== "" })
-      }
+      onStreamFinished: root.pickerOutput = String(text || "")
+    }
+    onExited: function(exitCode, exitStatus) {
+      var request = root.activePickerRequest
+      var output = root.pickerOutput
+      Qt.callLater(function() { root.finishPickerRequest(request, output) })
     }
   }
 
@@ -365,7 +430,11 @@ Panel {
     var entry = ({})
     for (var name in root.settings) entry[name] = root.settings[name]
     entry.id = root.moduleName
-    entry[key] = value
+    if (key && typeof key === "object") {
+      for (var update in key) entry[update] = key[update]
+    } else {
+      entry[key] = value
+    }
     // The host returns false for an unchanged entry, not just a rejected write.
     if (JSON.stringify(entry) === JSON.stringify(root.settings)) {
       root.settingsError = ""
@@ -987,7 +1056,9 @@ Panel {
               model: root.pickerImages
 
               delegate: Item {
+                id: pickerItem
                 required property var modelData
+                property var requestContext: root.pickerResultContext
                 width: picker.cellWidth
                 height: picker.cellHeight
 
@@ -1012,7 +1083,7 @@ Panel {
                 MouseArea {
                   anchors.fill: parent
                   cursorShape: Qt.PointingHandCursor
-                  onClicked: root.persistDisplay("pinned", String(modelData))
+                  onClicked: root.selectPickerImage(String(modelData), pickerItem.requestContext)
                 }
               }
             }

@@ -36,7 +36,7 @@ function scope(functions, overrides = {}) {
     console, serviceActive: true, home: '/home/test', currentBackground: '/theme/default.jpg',
     screenNames: () => ['DP-1', 'DP-2'], hasServiceContext: () => true,
     displayedMap: {}, incomingMap: {}, oldMap: {}, slotAMap: {}, slotBMap: {}, frontSlot: 0,
-    backgroundVersion: 0, revealStartedVersion: -1, incomingReady: {}, revealArmed: false,
+    backgroundVersion: 0, revealStartedVersion: -1, incomingReady: {}, incomingFailed: {}, revealArmed: false,
     revealProgress: 1, revealAnimation: timer(), revealArmTimeout: timer(),
     configReload: timer(), pruneStagedPinnedPaths() {}, hasFolder: () => true,
     stagedPinnedPaths: {}, stagedPinnedLeaseTokens: {}, failedPinnedPaths: {},
@@ -58,8 +58,145 @@ function binding(source, id, name, fallback) {
   return match ? match[1] : fallback;
 }
 
+test('reveal timeout preserves the front slot until every display has decoded', () => {
+  const s = scope(['handleRevealTimeout'], {
+    backgroundVersion: 7,
+    revealTimedOutVersion: -1,
+    screenNames: () => ['DP-1', 'DP-2'],
+    incomingReady: { 'DP-1': true },
+    frontSlot: 0,
+    revealProgress: 0,
+    slotAMap: { 'DP-1': '/old/one.png', 'DP-2': '/old/two.png' },
+    slotBMap: { 'DP-1': '/new/one.png', 'DP-2': '/new/two.png' },
+  });
+  const timeoutStart = background.indexOf('id: revealArmTimeout');
+  const timeoutEnd = background.indexOf('// --------------------------------------------------------------- actions', timeoutStart);
+  const timeoutCode = background.slice(timeoutStart, timeoutEnd).split(String.fromCharCode(10))
+    .find(line => line.trim().startsWith('onTriggered:')).split(':').slice(1).join(':').trim();
+  vm.runInContext(timeoutCode, s);
+  assert.equal(s.revealTimedOutVersion, 7, 'timeout should be tied to its transition generation');
+  assert.equal(s.revealArmed, false);
+  assert.equal(s.frontSlot, 0);
+  assert.deepEqual(plain(s.slotAMap), { 'DP-1': '/old/one.png', 'DP-2': '/old/two.png' });
+  assert.deepEqual(plain(s.slotBMap), { 'DP-1': '/new/one.png', 'DP-2': '/new/two.png' });
+  assert.equal(s.revealAnimation.starts, 0);
+});
+
+test('late decoder readiness is ignored when its transition generation or path is stale', () => {
+  const s = scope(['noteIncomingReady'], {
+    backgroundVersion: 2,
+    incomingMap: { 'DP-1': '/new/one.png', 'DP-2': '/new/two.png' },
+    incomingReady: {},
+    armRevealIfReady() {},
+  });
+  s.noteIncomingReady('DP-2', 1, '/old/two.png');
+  assert.deepEqual(plain(s.incomingReady), {});
+  s.noteIncomingReady('DP-2', 2, '/new/two.png');
+  assert.deepEqual(plain(s.incomingReady), { 'DP-2': true });
+});
+
+test('arm refuses to expose an incoming slot while any display is unready', () => {
+  const s = scope(['armReveal', 'incomingReadyForCurrentTransition'], {
+    backgroundVersion: 3,
+    screenNames: () => ['DP-1', 'DP-2'],
+    incomingReady: { 'DP-1': true },
+    revealStartedVersion: -1,
+    applyPendingTheme() {},
+  });
+  s.armReveal();
+  assert.equal(s.revealArmed, false);
+  assert.equal(s.revealAnimation.starts, 0);
+  assert.equal(s.revealStartedVersion, -1);
+});
+
+test('a stale animation completion cannot promote or release an unready display slot', () => {
+  let prunes = 0;
+  const s = scope(['incomingReadyForCurrentTransition'], {
+    backgroundVersion: 9,
+    revealStartedVersion: -1,
+    incomingReady: { 'DP-1': true },
+    frontSlot: 0,
+    currentBackground: '/new/one.png',
+    displayedMap: { 'DP-1': '/old/one.png', 'DP-2': '/old/two.png' },
+    incomingMap: { 'DP-1': '/new/one.png', 'DP-2': '/new/two.png' },
+    slotAMap: { 'DP-1': '/old/one.png', 'DP-2': '/old/two.png' },
+    slotBMap: { 'DP-1': '/new/one.png', 'DP-2': '/new/two.png' },
+    screenNames: () => ['DP-1', 'DP-2'],
+    hasFolder: () => false,
+    pruneStagedPinnedPaths() { prunes++; },
+  });
+  const finishBody = body(background.slice(background.indexOf('id: revealAnimation')), 'onFinished:');
+  vm.runInContext(`(function() { ${finishBody} })()`, s);
+  assert.equal(s.frontSlot, 0);
+  assert.deepEqual(plain(s.slotAMap), { 'DP-1': '/old/one.png', 'DP-2': '/old/two.png' });
+  assert.deepEqual(plain(s.displayedMap), { 'DP-1': '/old/one.png', 'DP-2': '/old/two.png' });
+  assert.equal(prunes, 0);
+});
+
+test('decoder errors from stale paths or generations cannot poison current media', () => {
+  const replacements = [];
+  const s = scope(['noteBadImage', 'noteIncomingReady'], {
+    backgroundVersion: 5,
+    incomingMap: { 'DP-1': '/current/new.png' },
+    incomingReady: {},
+    badImages: {},
+    dropFromQueue() {},
+    replaceBadImage(path) { replacements.push(path); },
+    armRevealIfReady() {},
+  });
+  s.noteBadImage('/previous/old.png', 'DP-1', 4);
+  assert.deepEqual(plain(s.badImages), {});
+  assert.deepEqual(replacements, []);
+  s.noteBadImage('/current/new.png', 'DP-1', 4);
+  assert.deepEqual(plain(s.badImages), {});
+  s.noteBadImage('/current/new.png', 'DP-1', 5);
+  assert.deepEqual(plain(s.badImages), { '/current/new.png': true });
+  assert.deepEqual(replacements, ['/current/new.png']);
+  s.noteIncomingReady('DP-1', 5, '/current/new.png');
+  assert.deepEqual(plain(s.incomingReady), {}, 'a later ready callback must not revive a failed incoming frame');
+});
+
+test('renderer errors are matched to slot source, generation, and display before affecting state', () => {
+  let prunes = 0;
+  let stops = 0;
+  const s = scope(['noteRendererError', 'noteBadImage', 'noteIncomingReady'], {
+    backgroundVersion: 4,
+    frontSlot: 0,
+    displayedMap: { 'DP-1': '/logical/old.png', 'DP-2': '/logical/other-old.png' },
+    incomingMap: { 'DP-1': '/logical/new.png', 'DP-2': '/logical/other-new.png' },
+    slotAMap: { 'DP-1': '/logical/old.png', 'DP-2': '/logical/other-old.png' },
+    slotBMap: { 'DP-1': '/logical/new.png', 'DP-2': '/logical/other-new.png' },
+    slotAGeneration: 1,
+    slotBGeneration: 2,
+    incomingReady: {},
+    incomingFailed: {},
+    revealStartedVersion: 4,
+    revealProgress: 0.6,
+    revealArmed: true,
+    revealAnimation: { stop() { stops++; }, restart() {} },
+    badImages: {},
+    renderPathFor: (logical, generation) => `/cache/${generation}/${logical.split('/').pop()}`,
+    dropFromQueue() {},
+    replaceBadImage() {},
+    armRevealIfReady() {},
+    pruneStagedPinnedPaths() { prunes++; },
+  });
+  s.noteRendererError('DP-1', 1, '/cache/1/old.png');
+  assert.deepEqual(plain(s.badImages), {}, 'a stale slot error must be ignored');
+  s.noteRendererError('DP-1', 1, '/cache/2/new.png');
+  assert.deepEqual(plain(s.badImages), { '/logical/new.png': true });
+  assert.deepEqual(plain(s.incomingFailed), { 'DP-1': '/logical/new.png' });
+  assert.equal(stops, 1, 'a decoder error during reveal must cancel the animation');
+  assert.equal(s.revealProgress, 0, 'the prior visible frame must be restored');
+  assert.equal(s.revealArmed, false);
+  s.noteIncomingReady('DP-1', 4, '/logical/new.png');
+  assert.deepEqual(plain(s.incomingReady), {}, 'failed incoming media cannot be revived by late readiness');
+  assert.deepEqual(plain(s.slotAMap), { 'DP-1': '/logical/old.png', 'DP-2': '/logical/other-old.png' });
+  assert.equal(prunes, 0, 'the visible front slot lease must not be pruned');
+});
+
 test('mixed: default output survives custom shuffle and slot promotion', () => {
-  const s = scope(['pickForScreens', 'applyPerScreen', 'beginTransition', 'displayedIsEmpty'], {
+  const s = scope(['pickForScreens', 'applyPerScreen', 'beginTransition', 'displayedIsEmpty', 'incomingReadyForCurrentTransition'], {
     displayedMap: { 'DP-1': '/custom/old.jpg', 'DP-2': '/theme/default.jpg' },
     slotAMap: { 'DP-1': '/custom/old.jpg', 'DP-2': '/theme/default.jpg' },
     configFor: name => ({ folder: name === 'DP-1' ? '/custom' : '', mode: 'shuffle', pinned: '' }),
@@ -71,7 +208,9 @@ test('mixed: default output survives custom shuffle and slot promotion', () => {
   assert.equal(picks['DP-2'], '/theme/default.jpg');
   s.applyPerScreen(picks, false);
   assert.deepEqual(plain(s.slotBMap), { 'DP-1': '/custom/next.jpg', 'DP-2': '/theme/default.jpg' });
-  vm.runInContext(body(background.slice(background.indexOf('NumberAnimation {')), 'onFinished:'), s);
+  s.incomingReady = { 'DP-1': true, 'DP-2': true };
+  s.revealStartedVersion = s.backgroundVersion;
+  vm.runInContext(`(function() { ${body(background.slice(background.indexOf('NumberAnimation {')), 'onFinished:')} })()`, s);
   assert.equal(s.frontSlot, 1);
   assert.deepEqual(plain(s.displayedMap), plain(s.slotBMap));
   assert.deepEqual(plain(s.slotAMap), {});
@@ -152,7 +291,7 @@ test('mixed: native theme handoff updates defaults without dealing custom output
 });
 
 test('hotplug: unchanged global path reconciles new outputs before deduplicating', () => {
-  const s = scope(['applyGlobal', 'beginTransition', 'displayedIsEmpty'], {
+  const s = scope(['applyGlobal', 'beginTransition', 'displayedIsEmpty', 'incomingReadyForCurrentTransition'], {
     hasFolder: () => false,
     displayedMap: { 'DP-1': '/theme/default.jpg' },
     slotAMap: { 'DP-1': '/theme/default.jpg' },
@@ -161,8 +300,10 @@ test('hotplug: unchanged global path reconciles new outputs before deduplicating
   assert.equal(s.slotBMap['DP-2'], '/theme/default.jpg');
   assert.equal(s.backgroundVersion, 1);
   s.applyGlobal('', '/theme/default.jpg', '/theme/default.jpg', false, false);
-  assert.equal(s.backgroundVersion, 1, 'polling must not restart an in-flight reveal');
-  vm.runInContext(body(background.slice(background.indexOf('NumberAnimation {')), 'onFinished:'), s);
+  assert.equal(s.backgroundVersion, 1);
+  s.incomingReady = { 'DP-1': true, 'DP-2': true };
+  s.revealStartedVersion = s.backgroundVersion;
+  vm.runInContext(`(function() { ${body(background.slice(background.indexOf('NumberAnimation {')), 'onFinished:')} })()`, s);
   s.applyGlobal('', '/theme/default.jpg', '/theme/default.jpg', false, false);
   assert.equal(s.backgroundVersion, 1, 'fully covered outputs remain a no-op');
   s.screenNames = () => ['DP-2'];
@@ -207,7 +348,7 @@ test('theme: publishing a new pin generation cannot replace the visible slot', (
   const folder = '/home/test/.local/state/omarchy/current/theme/backgrounds';
   const pin = folder + '/same.png';
   const deferred = [];
-  const s = scope(['pinnedStageKey', 'renderPathFor', 'finishPinnedStage', 'applyPerScreen', 'beginTransition', 'displayedIsEmpty'], {
+  const s = scope(['pinnedStageKey', 'renderPathFor', 'finishPinnedStage', 'applyPerScreen', 'beginTransition', 'displayedIsEmpty', 'incomingReadyForCurrentTransition'], {
     screenNames: () => ['DP-1'], configFor: () => ({ folder, pinned: pin }),
     displayedMap: { 'DP-1': pin }, slotAMap: { 'DP-1': pin },
     safePath: value => value, isStagedSnapshotPath: () => true,
@@ -225,7 +366,9 @@ test('theme: publishing a new pin generation cannot replace the visible slot', (
   s.applyPerScreen({ 'DP-1': pin }, false);
   assert.equal(source('frameA', pin), '/cache/old.png', 'front slot remains unchanged during incoming preparation');
   assert.equal(source('frameB', pin), '/cache/new.png', 'incoming slot resolves its own generation');
-  vm.runInContext(body(background.slice(background.indexOf('NumberAnimation {')), 'onFinished:'), s);
+  s.incomingReady = { 'DP-1': true };
+  s.revealStartedVersion = s.backgroundVersion;
+  vm.runInContext(`(function() { ${body(background.slice(background.indexOf('NumberAnimation {')), 'onFinished:')} })()`, s);
   assert.equal(s.frontSlot, 1);
   assert.equal(source('frameB', pin), '/cache/new.png');
   assert.deepEqual(plain(s.slotAMap), {});
