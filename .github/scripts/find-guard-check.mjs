@@ -44,13 +44,34 @@ try {
 
     const body = extract(source, file === 'Background.qml' ? 'drainScans' : 'loadPicker');
     assert.match(body, /safePath\(/, `${file} validates the configured folder`);
-    assert.ok(body.includes('$1'), `${file} passes the folder as positional data`);
+    let command;
+    if (file === 'BarWidget.qml') {
+      // Exercise the actual request-to-Process boundary, not a historical
+      // assumption that loadPicker contains the shell program itself.
+      ctx.root = ctx;
+      ctx.current = { folder: good, recursive: false };
+      ctx.editingKey = 'DP-1';
+      ctx.pickerRequestGeneration = 0;
+      ctx.pickerProc = { running: false, command: null };
+      vm.runInContext(`${extract(source, 'startPickerRequest')}; ${body}; loadPicker()`, ctx);
+      const argv = ctx.pickerProc.command;
+      assert.ok(argv, `${file} starts the requested scan`);
+      assert.equal(argv[0], 'bash');
+      assert.equal(argv[1], '-c');
+      assert.equal(argv[4], good, `${file} passes the exact folder as separate positional data`);
+      assert.equal(argv[5], '-maxdepth 1');
+      command = argv[2];
+      assert.ok(!command.includes(good), `${file} never embeds the configured folder in shell code`);
+    } else {
+      command = scannerCommand(source, file);
+    }
+    assert.ok(command.includes('$1'), `${file} passes the folder as positional data`);
     assert.doesNotMatch(body, /Util\.shellQuote\([^)]*folder|\+\s*Util\.shellQuote\(/,
       `${file} does not interpolate the folder into the shell source`);
-    assert.ok(body.indexOf('test -d "$1" || exit 0') < body.indexOf('timeout --kill-after=1s 15s find'),
+    const directoryGuard = command.indexOf('test -d "$1" || exit 0');
+    const scanner = command.indexOf('timeout --kill-after=1s 15s find');
+    assert.ok(directoryGuard >= 0 && scanner > directoryGuard,
       `${file} checks directory existence before invoking find`);
-
-    const command = scannerCommand(source, file);
     const scan = spawnSync('/bin/bash', ['-c', command, 'wpm-test', good, '-maxdepth 1'],
       { encoding: 'utf8', timeout: 5000 });
     assert.equal(scan.status, 0, `${file} safe fixture scan: ${scan.stderr || ''}`);
